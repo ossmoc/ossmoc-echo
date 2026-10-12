@@ -12,7 +12,7 @@ Tải bản Windows ở **Releases**, giải nén toàn bộ thư mục và mở
 2. Mở game bằng ngôn ngữ English.
 3. **Tổng quát → Chọn game → Kết nối → Bắt đầu dịch**.
 
-Bản công khai không kèm dữ liệu game, database WAHU, ảnh chụp, cấu hình
+Bản công khai không kèm dữ liệu game, ảnh chụp, cấu hình
 người dùng hoặc công cụ FModelCLI. Có thể nhập dữ liệu hợp lệ từ nguồn
 chính thức. Cần đọc lại dữ liệu game sau khi game cập nhật. Xem
 [hướng dẫn](docs/USER-GUIDE.md) và [build từ source](docs/BUILD.md).
