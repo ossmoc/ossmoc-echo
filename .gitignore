@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+artifacts/
+userdata/
+cache/
+log/
+data/
+config/settings.json
+*.db
+*.db-shm
+*.db-wal
+*.onnx
+*.exe
+.env

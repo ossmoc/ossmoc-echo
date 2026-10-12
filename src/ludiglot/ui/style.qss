@@ -1,0 +1,108 @@
+/* 鸣潮风格 - 赛博深色主题 (深色纤细装饰版) */
+
+/* 最外层主背景 + 核心金边 */
+#OverlayRoot {
+    background-color: rgba(5, 7, 10, 255);
+    border: 1px solid #aa9b6a;
+    border-radius: 2px; /* 大幅缩减圆角 */
+}
+
+/* 中间装饰层 - 深灰色带 */
+#StripeFrame {
+    background-color: rgba(45, 52, 62, 255);
+    border: none;
+    border-radius: 2px; /* 同步缩减，配合外框 */
+}
+
+/* 内部核心容器 - 叠加在深灰色带之上 */
+#InnerFrame {
+    background-color: rgba(15, 18, 22, 255);
+    border: none;
+    border-top-left-radius: 2px;
+    border-top-right-radius: 2px;
+    border-bottom-left-radius: 2px;
+    border-bottom-right-radius: 20px; /* 唯一的高圆角视觉焦点 */
+}
+
+#Title {
+    color: #aa9b6a;
+    font-size: 15pt;
+    font-weight: Bold;
+    padding: 0 0 5 0;
+}
+
+#SourceText, #AccentText {
+    background-color: rgba(170, 155, 106, 8);
+    border: 1px solid rgba(170, 155, 106, 45);
+    border-radius: 4px;
+    color: #f0f4f8;
+    padding: 12px 15px;
+    selection-background-color: #706d54;
+}
+
+#SourceText:hover, #AccentText:hover {
+    background-color: rgba(170, 155, 106, 15);
+    border: 1px solid rgba(170, 155, 106, 90);
+}
+
+/* 状态栏 */
+#StatusText {
+    color: rgba(170, 155, 106, 180);
+    font-size: 9pt;
+    background: transparent;
+    qproperty-alignment: 'AlignHCenter';
+}
+
+/* 按钮风格 */
+QPushButton {
+    background-color: rgba(170, 155, 106, 25);
+    color: #aa9b6a;
+    border: 1px solid rgba(170, 155, 106, 80);
+    border-radius: 8px;
+    padding: 6px 16px;
+}
+
+QPushButton:hover {
+    background-color: rgba(170, 155, 106, 50);
+}
+
+/* 进度条 */
+#AudioSlider::handle:horizontal {
+    background: #aa9b6a;
+    border-radius: 1px;
+}
+
+#AudioSlider::sub-page:horizontal {
+    background: #aa9b6a;
+}
+
+/* 音频控制栏及时间显示 */
+#AudioControl {
+    background-color: rgba(255, 255, 255, 15);
+    color: rgba(200, 200, 200, 200); /* 银灰色 */
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 4px;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+    font-weight: bold;
+    padding: 0px; /* 清除通用 QPushButton 的大 padding，保证图标不被挤出视野 */
+}
+
+#AudioControl:hover {
+    background-color: rgba(255, 255, 255, 25);
+    color: rgba(255, 255, 255, 255);
+    border: 1px solid rgba(255, 255, 255, 50);
+}
+
+#AudioControl:disabled {
+    background-color: rgba(255, 255, 255, 5);
+    color: rgba(255, 255, 255, 30); /* 禁用状态下的半透明色 */
+    border: 1px solid rgba(255, 255, 255, 10);
+}
+
+#TimeLabel {
+    color: rgba(200, 200, 200, 200); /* 银灰色 */
+    font-size: 9pt;
+    font-family: "Segoe UI", sans-serif;
+    background: transparent;
+}

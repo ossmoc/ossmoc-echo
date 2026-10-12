@@ -1,0 +1,30 @@
+[project]
+name = "ossmoc-echo"
+version = "1.0.0"
+description = "Vietnamese source-aligned captions for Wuthering Waves"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+authors = [{name = "Ossmoc"}]
+dependencies = [
+  "rapidfuzz>=3.0", "pytesseract>=0.3.10", "pillow>=10.0",
+  "playsound==1.2.2", "mss>=9.0.0", "pywin32>=306",
+  "windows-capture==2.0.1; sys_platform == 'win32'", "PyQt6>=6.6", "pynput>=1.7",
+  "winrt-Windows.Media.Ocr>=3.2.0", "winrt-Windows.Globalization>=3.2.0",
+  "winrt-Windows.Storage.Streams>=3.2.0", "winrt-Windows.Graphics.Imaging>=3.2.0",
+  "winrt-Windows.Foundation>=3.2.0", "winrt-Windows.Foundation.Collections>=3.2.0",
+]
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+build = ["pyinstaller>=6.22,<7"]
+light-ocr = ["rapidocr==3.10.0", "onnxruntime==1.31.0"]
+[project.scripts]
+ossmoc-echo = "ludiglot.desktop_entry:main"
+[tool.setuptools]
+package-dir = {"" = "src"}
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.setuptools.package-data]
+ludiglot = ["ui/*.qss"]
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
