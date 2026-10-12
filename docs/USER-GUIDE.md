@@ -11,7 +11,7 @@ Giữ `_internal` cạnh EXE; cấu hình và dữ liệu được lưu trong `u
 3. Trong **Tổng quát**, bấm **Chọn game**, chọn Wuthering Waves, **Kết nối**.
 4. Bấm **Bắt đầu dịch**. Phím bật/tạm dừng mặc định **Alt+W**.
 
-Bản công khai không kèm dữ liệu game/WAHU hay FModelCLI. Đọc lại game
+Bản công khai không kèm dữ liệu game hay FModelCLI. Đọc lại game
 có thể cần tải công cụ trích xuất riêng từ nguồn được app chỉ định;
 kiểm tra nguồn và giấy phép của công cụ trước khi sử dụng.
 Khi chưa có dữ liệu, app hiện hướng dẫn trong giao diện, không tự dịch.
