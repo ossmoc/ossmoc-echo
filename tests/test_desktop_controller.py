@@ -415,6 +415,8 @@ def test_open_check_does_not_skip_recent_cached_release(controller, monkeypatch)
 def test_current_release_has_short_status_and_never_prompts_download(controller, monkeypatch):
     from types import SimpleNamespace
     from ludiglot.core.translation_update import ReleaseInfo
+    controller.config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    controller.config.db_path.write_text('{}')
     monkeypatch.setattr(controller, "_updater", lambda: SimpleNamespace(active_manifest=lambda: {"release_tag": "v3.0.16"}))
     release = ReleaseInfo("v3.0.16", body="Wuthering Waves 3.7\nLong README must not show", game_version="3.7")
     controller._on_job_finished({"kind": "check", "result": release})
@@ -439,12 +441,12 @@ def test_joint_check_keeps_app_result_when_translation_network_fails(controller,
     from types import SimpleNamespace
     from ludiglot.core.app_update import AppRelease
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.0.2', '', 10, '')
+    app_release = AppRelease('v1.0.3', '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.0.2' in controller.app_update_summary
+    assert controller.app_update_available and 'v1.0.3' in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 
@@ -467,6 +469,41 @@ def test_translation_label_uses_friendly_name(controller, monkeypatch):
     monkeypatch.setattr(controller, '_updater', lambda:SimpleNamespace(active_manifest=lambda:{'release_tag':'v3.0.16'}))
     assert 'Bản dịch đang dùng: v3.0.16' in controller.translation_version_summary
     assert 'WAHU đang dùng' not in controller.translation_version_summary
+
+
+def test_missing_english_cache_never_starts_download_or_confirmation(controller, monkeypatch):
+    monkeypatch.setattr(controller, '_start_job', lambda *_a, **_k:pytest.fail('Missing English: no network/download worker'))
+    monkeypatch.setattr(controller_module.QMessageBox,'question',lambda *_a,**_k:pytest.fail('No download dialog'))
+    original = controller.store.load_raw()
+    controller.download_update()
+    assert 'Chưa có dữ liệu English' in controller.status
+    assert 'Wuthering Waves Game' in controller.status
+    assert 'WinError' not in controller.status
+    assert controller.store.load_raw() == original
+
+
+def test_cached_warning_is_friendly_without_modifying_manifest(controller, monkeypatch):
+    from types import SimpleNamespace
+    warning = 'Chưa xác định phiên bản văn bản nguồn; vẫn kiểm tra nội dung English khi WAHU cung cấp.'
+    manifest = {'release_tag':'v3.0.16','warnings':[warning]}
+    monkeypatch.setattr(controller,'_updater',lambda:SimpleNamespace(active_manifest=lambda:manifest))
+    monkeypatch.setattr(controller,'_sync_session_regions',lambda:None)
+    controller._on_initialized({'token':controller._init_token,'config':controller.config,
+        'engine':object(),'matcher':object(),'params':None,'count':12,
+        'coverage':{'vietnamese':8,'english_fallback':4}})
+    assert 'khi bản dịch cung cấp' in controller.data_summary
+    assert 'WAHU' not in controller.data_summary
+    assert manifest['warnings'] == [warning]
+
+
+def test_usage_guide_is_available_after_onboarding(controller, monkeypatch):
+    messages=[]
+    monkeypatch.setattr(controller_module.QMessageBox,'information',lambda _parent,_title,text:messages.append(text))
+    controller.raw['desktop_onboarding_done']=True
+    controller.show_usage_guide()
+    assert 'không chọn .exe hoặc .pak' in messages[0]
+    assert 'phiên bản game đang cài' in messages[0]
+    assert messages[0].index('Chuẩn bị') < messages[0].index('Bắt đầu dịch')
 
 
 def test_realtime_hotkey_can_turn_off_and_back_on_last_region_without_stopping_intent(controller):

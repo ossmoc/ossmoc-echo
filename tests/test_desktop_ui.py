@@ -26,12 +26,13 @@ class FakeController(QObject):
         self.status='Sẵn sàng'; self.ready=True; self.session=SimpleNamespace(running=False)
         self.logs=['Sẵn sàng']; self.history=[{'text':'Chào Jinhsi'}]
         self.data_summary='100 câu Việt'; self.translation_version_summary='Bản dịch đang dùng: v3.0.16 · WuWa 3.7'
-        self.app_version='1.0.1'; self.app_update_summary='Ossmoc Echo đã là bản mới nhất (v1.0.1)'; self.app_update_available=False
+        self.app_version='1.0.2'; self.app_update_summary='Ossmoc Echo đã là bản mới nhất (v1.0.2)'; self.app_update_available=False
+        self.has_english_data=True
         self.update_summary='Đã là bản mới nhất Wuthering Waves 3.7'; self.update_available=False
         self.story_options=(StoryGroup('Main_LahaiRoi_3_1','3.1 · Lahai-Roi','3.1','Main_LahaiRoi_3_1_1_1',10),
                             StoryGroup('Main_Mengzhou_3_6','3.6 · Mengzhou','3.6','Main_Mengzhou_3_6_20_1',12))
     def __getattr__(self,name):
-        if name in {'choose_game_window','toggle_realtime','check_updates','download_update','download_app_update','rescan_game','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
+        if name in {'choose_game_window','toggle_realtime','check_updates','download_update','download_app_update','rescan_game','show_usage_guide','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
             return lambda *a,**k:self.calls.append((name,a,k))
         raise AttributeError(name)
     def update_auto_settings(self,**values):
@@ -157,15 +158,34 @@ def test_app_update_is_separate_and_unneeded_data_actions_removed(panel):
     texts=[w.text() for w in panel.findChildren(QPushButton)]
     assert 'Phục hồi bản trước' not in texts and 'Nhập bản dịch' not in texts
     assert 'Chuẩn bị / làm mới dữ liệu English' in texts
-    assert 'v1.0.1' in panel.app_version_label.text()
+    assert 'v1.0.2' in panel.app_version_label.text()
     assert not panel.app_download_button.isEnabled()
     panel.controller.app_update_available=True
-    panel.controller.app_update_summary='Có bản cập nhật Ossmoc Echo v1.0.2'; panel.refresh_data()
+    panel.controller.app_update_summary='Có bản cập nhật Ossmoc Echo v1.0.3'; panel.refresh_data()
     assert panel.app_download_button.isEnabled()
     panel.app_download_button.click(); assert panel.controller.calls[-1][0]=='download_app_update'
     panel.check_update_button.click(); assert panel.controller.calls[-1]==('check_updates',(),{'force':True})
     panel.controller._checking_updates=True; panel.refresh_data()
     assert not panel.check_update_button.isEnabled() and not panel.app_download_button.isEnabled()
+
+
+def test_english_help_visible_without_opening_diagnostics_and_blocks_missing_data(panel):
+    assert 'Tác dụng:' in panel.english_data_note.text()
+    assert 'Khi dùng:' in panel.english_data_note.text()
+    assert 'không chọn file .exe hay .pak' in panel.english_data_note.text()
+    assert 'không phải phiên bản Ossmoc Echo' in panel.english_data_note.text()
+    assert not panel.data_tools_toggle.isChecked()
+    panel.controller.has_english_data=False
+    panel.controller.update_available=True; panel.refresh_data()
+    assert not panel.download_button.isEnabled()
+    assert 'Chưa có dữ liệu English' in panel.download_button.toolTip()
+    assert 'chưa có' in panel.english_data_state.text()
+    assert not panel.missing_data_note.isHidden()
+    panel.prepare_english_button.click(); assert panel.controller.calls[-1][0]=='rescan_game'
+    panel.controller.has_english_data=True; panel.refresh_data()
+    assert panel.download_button.isEnabled() and panel.missing_data_note.isHidden()
+    next(b for b in panel.findChildren(QPushButton) if b.text()=='Hướng dẫn sử dụng').click()
+    assert panel.controller.calls[-1][0]=='show_usage_guide'
 
 
 def test_logs_plain_history_copy_complete_and_advanced_collapsed(panel,app):

@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
     QStackedWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget, QFontComboBox)
 from ludiglot.core.desktop_models import AUTO_DEFAULTS, HOTKEY_DEFAULTS
 from ludiglot.core.story_catalog import dialogue_scene, story_label
+from ludiglot.core.usage_help import ENGLISH_DATA_NOTE, MISSING_ENGLISH_DATA
 from ludiglot.ui.hotkey_editor import HotkeyRecorder
 
 PANEL_STYLESHEET = """
@@ -123,6 +124,8 @@ class ControlPanel(QMainWindow):
         row.addWidget(self.capture_source_label,1)
         self.connect_button = self._button('Chọn game','choose_game_window'); row.addWidget(self.connect_button); layout.addLayout(row)
         layout.addWidget(self._label('Chỉ đọc cửa sổ game đã chọn.',muted=True))
+        self.missing_data_note = self._label(MISSING_ENGLISH_DATA,muted=True)
+        layout.addWidget(self.missing_data_note)
         self._heading(layout,'02  Bắt đầu dịch')
         self.runtime_summary = self._label(); layout.addWidget(self.runtime_summary)
         self.start_button = self._button('Bắt đầu dịch','toggle_realtime',primary=True); self.start_button.setMinimumHeight(48)
@@ -192,10 +195,13 @@ class ControlPanel(QMainWindow):
         self.app_download_button = self._button('Cập nhật Ossmoc Echo','download_app_update'); row.addWidget(self.app_download_button)
         self.download_button = self._button('Cập nhật bản dịch','download_update',primary=True); row.addWidget(self.download_button); row.addStretch(); layout.addLayout(row)
         layout.addWidget(self._label('Kiểm tra app và bản dịch một lần khi mở; chỉ tải khi bạn chọn cập nhật.',muted=True))
-        inner,self.data_tools_toggle = self._fold(layout,'Dữ liệu nâng cao')
-        inner.addWidget(self._button('Chuẩn bị / làm mới dữ liệu English','rescan_game'))
-        inner.addWidget(self._label('Lấy văn bản English từ game để tìm đúng bản Việt. '
-            'Chỉ cần khi chuẩn bị lần đầu hoặc sau khi game cập nhật; không sửa file game.',muted=True))
+        self.english_data_state = self._label(); layout.addWidget(self.english_data_state)
+        row = QHBoxLayout()
+        self.prepare_english_button = self._button('Chuẩn bị / làm mới dữ liệu English','rescan_game')
+        row.addWidget(self.prepare_english_button)
+        row.addWidget(self._button('Hướng dẫn sử dụng','show_usage_guide')); row.addStretch(); layout.addLayout(row)
+        self.english_data_note = self._label(ENGLISH_DATA_NOTE,muted=True); layout.addWidget(self.english_data_note)
+        inner,self.data_tools_toggle = self._fold(layout,'Chẩn đoán và lịch sử')
         self.data_text = QTextEdit(); self.data_text.setReadOnly(True); self.data_text.setMaximumHeight(150); inner.addWidget(self.data_text)
         inner.addWidget(self._label('Lịch sử trong phiên — bấm đúp để sao chép',muted=True))
         self.history_list = QListWidget(); self.history_list.setMaximumHeight(140)
@@ -281,7 +287,12 @@ class ControlPanel(QMainWindow):
         self.app_update_label.setText(getattr(self.controller,'app_update_summary','Chưa kiểm tra cập nhật app.'))
         self.overview_update_label.setText(self.controller.update_summary)
         busy = bool(getattr(self.controller,'_maintenance',False) or getattr(self.controller,'_checking_updates',False))
-        self.download_button.setEnabled(bool(getattr(self.controller,'update_available',False)) and not busy)
+        has_data = bool(getattr(self.controller,'has_english_data',False))
+        self.missing_data_note.setVisible(not has_data)
+        self.english_data_state.setText('Dữ liệu English: đã có.' if has_data else 'Dữ liệu English: chưa có — hãy chuẩn bị trước khi cập nhật bản dịch.')
+        self.download_button.setEnabled(bool(getattr(self.controller,'update_available',False)) and has_data and not busy)
+        self.download_button.setToolTip('' if has_data else MISSING_ENGLISH_DATA)
+        self.prepare_english_button.setEnabled(not busy)
         self.app_download_button.setEnabled(bool(getattr(self.controller,'app_update_available',False)) and not busy)
         self.check_update_button.setEnabled(not busy)
         self.data_text.setPlainText(str(self.controller.data_summary))

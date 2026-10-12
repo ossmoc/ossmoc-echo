@@ -190,6 +190,9 @@ class TranslationUpdater:
             archive_asset = release.asset_named(f"App-Dich-WuWa-{release.tag}.zip")
             self._validate_asset(archive_asset, release.tag)
             official_cache = Path(official_cache).resolve()
+            if not official_cache.is_file():
+                from ludiglot.core.usage_help import MISSING_ENGLISH_DATA
+                raise TranslationUpdateError(MISSING_ENGLISH_DATA)
             generation = self._new_generation(release.tag)
             self._check_space(archive_asset.size + official_cache.stat().st_size * 2 + 2 * 1024**3)
             archive = generation / "download.zip"

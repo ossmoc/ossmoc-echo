@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ludiglot.core.app_paths import AppPaths
 from ludiglot.version import APP_VERSION
+from ludiglot.core.usage_help import MISSING_ENGLISH_DATA, USAGE_GUIDE
 from ludiglot.core.config import load_config
 from ludiglot.core.desktop_models import AUTO_DEFAULTS, OcrRegion, display_signature, migrate_desktop_settings, count_translation_coverage, normalize_auto_settings
 from ludiglot.core.display_shaper import DisplayPreferences, shape_translation_display
@@ -219,7 +220,7 @@ class DesktopController(QObject):
             try:
                 cfg = self._load_config()
                 if not cfg.db_path.is_file():
-                    raise FileNotFoundError("Chưa có dữ liệu tra cứu. Vào Dữ liệu → Quét lại dữ liệu game hoặc nhập dữ liệu đang có.")
+                    raise FileNotFoundError(MISSING_ENGLISH_DATA)
                 db = json.loads(cfg.db_path.read_text(encoding="utf-8"))
                 if not isinstance(db, dict) or not db:
                     raise ValueError("Dữ liệu tra cứu trống hoặc không hợp lệ.")
@@ -228,9 +229,9 @@ class DesktopController(QObject):
                     import sqlite3
                     try:
                         repaired = WahuTranslationProvider(cfg.wahu_db_path, require_source_english=True).enrich(db, source_moves_only=True)
-                        self.log_message.emit(f"Phục hồi {repaired.verified_source_moves:,} liên kết WAHU từ lịch sử nguồn English/Chinese đã xác nhận (không sửa dữ liệu game).")
+                        self.log_message.emit(f"Phục hồi {repaired.verified_source_moves:,} liên kết bản dịch từ lịch sử nguồn English/Chinese đã xác nhận (không sửa dữ liệu game).")
                     except (OSError, sqlite3.DatabaseError) as exc:
-                        self.log_message.emit(f"Không phục hồi liên kết nguồn WAHU; giữ cache đang dùng: {exc}")
+                        self.log_message.emit(f"Không phục hồi liên kết nguồn bản dịch; giữ cache đang dùng: {exc}")
                 from ludiglot.core.light_ocr import LightDialogueOcr
                 fallback = LightDialogueOcr(self.paths.resource_root/'models'/'light_ocr', self.log_message.emit)
                 fallback.prepare_runtime()
@@ -272,7 +273,7 @@ class DesktopController(QObject):
             if manifest:
                 self.data_summary += "\nBản Việt: " + str(manifest.get("release_tag") or "nhập offline / dữ liệu cục bộ")
                 for warning in manifest.get("warnings", []):
-                    self.data_summary += "\n⚠ " + str(warning)
+                    self.data_summary += "\n⚠ " + re.sub(r'\bWAHU\b', 'bản dịch', str(warning), flags=re.I)
             else:
                 self.data_summary += "\nBản Việt cục bộ sẵn có (chưa có manifest release)."
         except Exception as exc:
@@ -283,6 +284,13 @@ class DesktopController(QObject):
         self.data_changed.emit()
         if payload.get("resume"):
             self.resume_realtime()
+
+    @property
+    def has_english_data(self):
+        return self.config.db_path.is_file()
+
+    def show_usage_guide(self):
+        QMessageBox.information(None, 'Hướng dẫn sử dụng Ossmoc Echo', USAGE_GUIDE)
 
     @property
     def translation_version_summary(self):
@@ -1363,6 +1371,10 @@ class DesktopController(QObject):
             self.log_message.emit(str(exc))
 
     def download_update(self):
+        if not self.has_english_data:
+            self._set_status(MISSING_ENGLISH_DATA)
+            self.data_changed.emit()
+            return
         if not self.latest_release:
             self.check_updates()
             return
@@ -1377,7 +1389,7 @@ class DesktopController(QObject):
         self._start_job("install", lambda: self._updater().install_release(self.latest_release, self.config.db_path, progress=self._status.emit, cancel=self._job_cancel))
 
     def import_translation(self):
-        path, _ = QFileDialog.getOpenFileName(None, "Nhập bản dịch offline", "", "WAHU (*.db *.zip)")
+        path, _ = QFileDialog.getOpenFileName(None, "Nhập bản dịch offline", "", "Bản dịch (*.db *.zip)")
         if path:
             self._start_job("install", lambda: self._updater().import_database(Path(path), self.config.db_path, progress=self._status.emit, cancel=self._job_cancel))
 
@@ -1477,11 +1489,11 @@ class DesktopController(QObject):
             return
         root = self.raw.get("game_install_root")
         if not root or not Path(root).is_dir():
-            root = QFileDialog.getExistingDirectory(None, "Chọn thư mục Wuthering Waves Game (chỉ đọc)")
+            root = QFileDialog.getExistingDirectory(None, "Chọn thư mục Wuthering Waves Game có Client — không chọn file EXE/PAK")
             if not root:
                 return
         # Explicit user-selected source version: never silently pick newest AES keys.
-        version, ok = QInputDialog.getText(None, "Phiên bản game", "Phiên bản Wuthering Waves đang cài (ví dụ 3.7):", text=str(self.raw.get("official_source_version") or self.raw.get("game_version") or ""))
+        version, ok = QInputDialog.getText(None, "Phiên bản game", "Phiên bản Wuthering Waves đang cài (ví dụ 3.7), không phải phiên bản Ossmoc Echo:", text=str(self.raw.get("official_source_version") or self.raw.get("game_version") or ""))
         if not ok or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version.strip()):
             self._set_status("Đã hủy: cần phiên bản game hợp lệ để chọn dữ liệu giải nén.")
             return

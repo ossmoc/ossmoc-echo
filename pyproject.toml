@@ -1,6 +1,6 @@
 [project]
 name = "ossmoc-echo"
-version = "1.0.1"
+version = "1.0.2"
 description = "Vietnamese source-aligned captions for Wuthering Waves"
 requires-python = ">=3.12"
 license = "GPL-3.0-only"

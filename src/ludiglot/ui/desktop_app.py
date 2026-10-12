@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from ludiglot.core.app_paths import AppPaths
 from ludiglot.core.preferences import atomic_write_json
+from ludiglot.core.usage_help import USAGE_GUIDE
 
 
 def run_desktop(config_path: Path | None = None, smoke_report: Path | None = None, qa_images=()) -> None:
@@ -75,7 +76,7 @@ def run_desktop(config_path: Path | None = None, smoke_report: Path | None = Non
     panel.show()
     if not controller.raw.get("desktop_onboarding_done") and not smoke_report:
         def onboarding():
-            QMessageBox.information(panel, "Bắt đầu với Ossmoc Echo", "1. Mở Wuthering Waves với ngôn ngữ English.\n2. Trong Tổng quát, bấm Chọn game → Kết nối.\n3. Bấm Bắt đầu dịch rồi trở lại game.\n\nTiến trình tự nhận diện, không cần nhập ID. Chỉnh chữ ở Hiển thị, cập nhật bản Việt ở Dữ liệu. Nút X thu app về khay; thoát hẳn từ menu biểu tượng khay.")
+            QMessageBox.information(panel, "Bắt đầu với Ossmoc Echo", USAGE_GUIDE)
             controller.raw["desktop_onboarding_done"] = True
             controller.store.update_values(desktop_onboarding_done=True)
         QTimer.singleShot(400, onboarding)
@@ -112,6 +113,8 @@ def run_desktop(config_path: Path | None = None, smoke_report: Path | None = Non
                 controller.overlay.verify_capture_exclusion()
                 panel.grab().save(str(smoke_report.with_suffix(".panel.png")))
                 ui_check = {'app_version':controller.app_version,
+                            'english_data_note':panel.english_data_note.text(),
+                            'has_english_data':controller.has_english_data,
                             'app_update_summary':controller.app_update_summary,
                             'translation_label':panel.translation_version_label.text().split('\n')[0],
                             'pages':[panel.navigation.item(i).text() for i in range(panel.navigation.count())],

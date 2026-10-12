@@ -5,11 +5,32 @@ Giữ `_internal` cạnh EXE; cấu hình và dữ liệu được lưu trong `u
 
 ## Lần đầu sử dụng
 
-1. Mở Wuthering Waves, chọn ngôn ngữ English.
-2. Trong **Dữ liệu**, chọn thư mục game để đọc dữ liệu English, rồi cập
-   nhật bản Việt WAHU hoặc nhập dữ liệu offline hợp lệ.
-3. Trong **Tổng quát**, bấm **Chọn game**, chọn Wuthering Waves, **Kết nối**.
-4. Bấm **Bắt đầu dịch**. Phím bật/tạm dừng mặc định **Alt+W**.
+Nếu app đã có đủ dữ liệu English và bản Việt, bỏ qua bước 1–3.
+
+1. Vào **Dữ liệu → Chuẩn bị / làm mới dữ liệu English**.
+2. Chọn **thư mục Wuthering Waves Game**, bên trong có thư mục `Client`.
+   Không chọn `launcher.exe`, file `.exe`, `.pak`, `.db` hoặc ZIP bản dịch.
+   Ví dụ bố cục: `Wuthering Waves/Wuthering Waves Game/Client` — chọn
+   `Wuthering Waves Game`, không chọn `Client`. Nếu không nhớ chỗ cài,
+   dùng chức năng mở thư mục game của launcher rồi tìm thư mục này.
+3. Nhập **phiên bản game đang cài**, chẳng hạn `3.7`, không phải phiên bản
+   Ossmoc Echo `1.0.2`. Đợi đọc dữ liệu hoàn tất, rồi bấm **Cập nhật bản dịch**.
+4. Mở Wuthering Waves bằng ngôn ngữ **English**. Trong **Tổng quát**,
+   bấm **Chọn game**, chọn Wuthering Waves, **Kết nối**.
+5. Bấm **Bắt đầu dịch**. Phím bật/tạm dừng mặc định **Alt+W**.
+
+## Dữ liệu English dùng để làm gì?
+
+Đây là các câu tiếng Anh gốc lấy từ game, giúp đối chiếu chữ OCR, tìm
+đúng câu và ghép bản Việt. Không phải model OCR hoặc một bản dịch.
+Nút **Chuẩn bị / làm mới dữ liệu English** chỉ cần dùng lần đầu khi
+chưa có dữ liệu hoặc sau khi game cập nhật. Không cần bấm mỗi lần mở app.
+App chỉ đọc file game và lưu kết quả trong `userdata`, không sửa game.
+
+Nếu **Cập nhật bản dịch** chưa bấm được và hiện “Chưa có dữ liệu English”,
+hãy hoàn thành bước 1–3. Nếu gặp lỗi đọc dữ liệu, xem nhật ký ở
+**Dữ liệu → Chẩn đoán và lịch sử**; dữ liệu cũ không bị xóa.
+Mở lại hướng dẫn ngay trong app bằng **Dữ liệu → Hướng dẫn sử dụng**.
 
 Bản công khai không kèm dữ liệu game hay FModelCLI. Đọc lại game
 có thể cần tải công cụ trích xuất riêng từ nguồn được app chỉ định;
@@ -22,8 +43,10 @@ Khi chưa có dữ liệu, app hiện hướng dẫn trong giao diện, không t
 - **Tiến trình:** chọn cốt truyện bạn đang ở hiện tại hoặc để tự nhận diện.
   Đây chỉ là gợi ý tìm câu; app luôn đối chiếu chữ OCR, không đoán câu tiếp.
 - **Hiển thị:** chỉnh sửa hiển thị bản dịch — font, cỡ chữ, màu, viền và nền.
-- **Dữ liệu:** phiên bản đang dùng, kiểm tra/cập nhật, nhập offline,
-  đọc lại game; các tiện ích chẩn đoán nằm trong Dữ liệu nâng cao.
+- **Dữ liệu:** phiên bản app và bản dịch, kiểm tra/cập nhật, chuẩn bị
+  dữ liệu English. **Kiểm tra cập nhật** kiểm tra cả hai; chọn **Cập nhật
+  Ossmoc Echo** hoặc **Cập nhật bản dịch** theo loại cần nâng cấp.
+  Các tiện ích chẩn đoán nằm trong **Chẩn đoán và lịch sử**.
 
 Không cần khoanh vùng. Hội thoại và đáp án dịch tại chỗ; tài liệu đọc
 dài có khung cuộn riêng. Thoại lúc di chuyển còn thử nghiệm.

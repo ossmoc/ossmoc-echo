@@ -95,6 +95,14 @@ def release_fixture(tmp_path: Path, mode: str = "en"):
     return release, {item.url: payload}
 
 
+def test_missing_english_cache_has_clear_instruction_and_no_staging(tmp_path):
+    release, _ = release_fixture(tmp_path)
+    updater = TranslationUpdater(tmp_path/'translations',opener=lambda *_a,**_k:pytest.fail('No download'))
+    with pytest.raises(TranslationUpdateError, match='Chưa có dữ liệu English'):
+        updater.install_release(release,tmp_path/'cache/missing.json')
+    assert not (tmp_path/'translations').exists()
+
+
 def test_release_serializes_without_losing_assets(tmp_path):
     release, _ = release_fixture(tmp_path)
     assert ReleaseInfo.from_dict(release.to_dict()) == release
