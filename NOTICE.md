@@ -17,6 +17,6 @@ portions. Preserve this notice and applicable dependency notices.
 The integrated application is conveyed under GPL-3.0-only. Originally MIT
 material retains its original notice; its MIT grant is not withdrawn.
 
-Game text, WAHU data, user screenshots/settings and external extractor
+Game text, user screenshots/settings and external extractor
 binaries are not included in the public release/source snapshot and are
 not relicensed by this project's GPL.

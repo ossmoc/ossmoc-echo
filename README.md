@@ -12,7 +12,7 @@ Tải bản Windows ở **Releases**, giải nén toàn bộ thư mục và mở
 2. Mở game bằng ngôn ngữ English.
 3. **Tổng quát → Chọn game → Kết nối → Bắt đầu dịch**.
 
-Bản công khai không kèm dữ liệu game, database WAHU, ảnh chụp, cấu hình
+Bản công khai không kèm dữ liệu game, ảnh chụp, cấu hình
 người dùng hoặc công cụ FModelCLI. Có thể nhập dữ liệu hợp lệ từ nguồn
 chính thức. Cần đọc lại dữ liệu game sau khi game cập nhật. Xem
 [hướng dẫn](docs/USER-GUIDE.md) và [build từ source](docs/BUILD.md).
@@ -45,7 +45,3 @@ Repo công khai không phải biện pháp ngăn sao chép; lịch sử Git, b�
 nguồn gốc và ghi công được giữ rõ ràng. Không áp thêm điều khoản chống
 fork/clone trái với GPL. Tên dự án không có nghĩa là một fork được Ossmoc
 hỗ trợ hoặc là bản phát hành chính thức.
-
-WAHU và Wuthering Waves thuộc về các chủ sở hữu/tác giả tương ứng.
-Giấy phép của ứng dụng không cấp quyền phân phối lại dữ liệu của họ.
-Nguồn bản Việt: [WahuVN/Viet-Hoa-WuWa](https://github.com/WahuVN/Viet-Hoa-WuWa).
