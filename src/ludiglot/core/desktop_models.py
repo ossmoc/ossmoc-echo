@@ -60,7 +60,7 @@ HOTKEY_DEFAULTS = {"hotkey_capture": "alt+w", "hotkey_toggle": "alt+h",
 AUTO_DEFAULTS = {
     "mode": "regions", "bounds": None, "screen": None,
     "dialogue": True, "walking": True, "choices": True, "document": True, "glossary": True, "transition": True,
-    "font_family": "Segoe UI", "font_size": 28, "text_color": "#ffffff",
+    "font_family": "Segoe UI", "font_size": 28, "choice_font_size": 20, "text_color": "#ffffff",
     "outline_color": "#101215", "outline_width": 2,
     "background_color": "#3b3e43", "background_opacity": 88,
     "reader_geometry": {}, "reader_font_size": 22, "show_bounds": False,
@@ -84,7 +84,7 @@ def normalize_auto_settings(value: Any) -> dict[str, Any]:
         result['presentation_version'] = 2
     if result["mode"] not in ("regions", "auto"):
         result["mode"] = "regions"
-    for key, low, high in (("font_size", 18, 64), ("reader_font_size", 14, 64),
+    for key, low, high in (("font_size", 18, 64), ("choice_font_size", 18, 64), ("reader_font_size", 14, 64),
                            ("outline_width", 0, 8), ("background_opacity", 0, 100)):
         try:
             result[key] = max(low, min(high, int(result[key])))

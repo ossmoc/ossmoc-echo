@@ -38,6 +38,7 @@ class WahuTranslationProvider:
         self.canonical_translations = canonical_translations
         self.require_source_english = require_source_english
         self._source_english: dict[tuple[str, str], str] = {}
+        self._source_speakers: dict[tuple[str, str], str] = {}
         self._source_moves: dict[tuple[str, str], tuple[str, str, tuple[str, str]]] = {}
 
     def load_exact_translations(self) -> dict[tuple[str, str], str]:
@@ -49,30 +50,35 @@ class WahuTranslationProvider:
             connection.execute("PRAGMA query_only=ON")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
             source_column = "en" if "en" in columns else "''"
+            speaker_column = "speaker" if "speaker" in columns else "''"
             rows = connection.execute(
-                f"SELECT dbfile, key, vi, {source_column} FROM entries "
+                f"SELECT dbfile, key, vi, {source_column}, {speaker_column} FROM entries "
                 "WHERE trim(coalesce(vi, '')) <> '' "
                 "AND lower(trim(coalesce(status, ''))) IN "
                 "('translated', 'final', 'edited', 'reviewed')"
             )
             translations: dict[tuple[str, str], str] = {}
             self._source_english = {}
+            self._source_speakers = {}
             duplicate: set[tuple[str, str]] = set()
-            for dbfile, text_key, vietnamese, english in rows:
+            for dbfile, text_key, vietnamese, english, speaker in rows:
                 identity = (str(dbfile).casefold(), str(text_key))
                 if identity in translations or identity in duplicate:
                     duplicate.add(identity)
                     translations.pop(identity, None)
                     self._source_english.pop(identity, None)
+                    self._source_speakers.pop(identity, None)
                     continue
                 if self.canonical_translations is not None:
                     vietnamese = self.canonical_translations.get(identity, "")
                 translations[identity] = str(vietnamese or "")
                 self._source_english[identity] = str(english or "")
+                self._source_speakers[identity] = str(speaker or "")
             self._source_moves = self._load_source_moves(connection, translations)
             for identity, (english, vietnamese, origin) in self._source_moves.items():
                 translations[identity] = vietnamese
                 self._source_english[identity] = english
+                self._source_speakers[identity] = self._source_speakers.get(origin, "")
             return translations
 
     def _load_source_moves(self, connection, translations):
@@ -81,7 +87,9 @@ class WahuTranslationProvider:
         Matching IDs or mask lengths are NOT evidence. The same source-sync
         event must record the real English/Chinese before masking, the exact
         current masks and the reviewed translation, and a unique destination
-        must contain that original English AND Chinese. No arbitrary aliases.
+        must retain the original Chinese and equivalent English. The only
+        English repairs allowed are explicit grammar variants or a unique
+        reviewed short terminology pair from the same translation database.
         """
         if self.canonical_translations is None:
             meta_columns = {r[1] for r in connection.execute("PRAGMA table_info(meta)")}
@@ -98,6 +106,7 @@ class WahuTranslationProvider:
         for table, columns in required.items():
             if not columns <= {r[1] for r in connection.execute(f"PRAGMA table_info({table})")}:
                 return {}
+        aliases = self._terminology_aliases(connection, translations)
         rows = connection.execute("""
             SELECT a.dbfile, a.key, a.vi, a.en, a.cn, a.conv, a.version,
                    s.old_en, s.old_cn, s.new_en, s.new_cn, s.vi_at_sync,
@@ -134,7 +143,8 @@ class WahuTranslationProvider:
                 continue
             if '*' in old_en or '*' in old_cn:
                 continue
-            if (_source_text(old_en), _source_text(old_cn)) != (_source_text(target_en or ''), _source_text(target_cn or '')):
+            if (_source_text(old_cn) != _source_text(target_cn or '')
+                    or not _equivalent_english(old_en, target_en or '', aliases)):
                 continue
             # Canonical English-name targets, when required, still come from
             # the reviewed source identity, never an unreviewed destination.
@@ -150,6 +160,28 @@ class WahuTranslationProvider:
                 origins.setdefault(origin, set()).add(destination)
         return {k: next(iter(v)) for k, v in candidates.items()
                 if len(v) == 1 and len(origins[next(iter(v))[2]]) == 1}
+
+    def _terminology_aliases(self, connection, translations):
+        """Unique reviewed term names, not sentence translations/fuzzy aliases."""
+        choices = {}
+        for dbfile, key, en, vi in connection.execute(
+                "SELECT dbfile,key,en,vi FROM entries WHERE trim(coalesce(vi,''))<>'' "
+                "AND lower(trim(status)) IN ('translated','final','edited','reviewed')"):
+            if (dbfile.casefold(), key) not in translations:
+                continue
+            if not (str(key).startswith('Entity_') or re.search(r'_(?:Name|Title)$', str(key))):
+                continue
+            en, vi = _source_text(str(en or '')), _source_text(str(vi or ''))
+            if (not 2 <= len(en) <= 40 or not 2 <= len(vi) <= 40
+                    or len(en.split()) > 4 or len(vi.split()) > 4
+                    or not re.fullmatch(r'[A-Za-z]+(?: [A-Za-z]+)*', en)
+                    or vi.isascii() or not all(c.isalpha() or c==' ' for c in vi)):
+                continue
+            # A Vietnamese term accidentally embedded in an English source
+            # may retain English plural '-s'. Both forms must stay unique.
+            for alias in (vi, vi+'s'):
+                choices.setdefault(alias, set()).add(en if alias==vi else en+'s')
+        return {alias: next(iter(values)) for alias, values in choices.items() if len(values)==1}
 
     def enrich(self, database: dict[str, dict[str, Any]], *, source_moves_only: bool = False) -> WahuMergeStats:
         translations = self.load_exact_translations()
@@ -169,6 +201,13 @@ class WahuTranslationProvider:
                 source_name = Path(str(match.get("source_json") or "")).name.casefold()
                 text_key = str(match.get("text_key") or "")
                 exact_identity = (source_name, text_key)
+                english = str(match.get("official_en") or "")
+                match.pop('verified_speaker', None)
+                # Role metadata is copied only after the source text was
+                # verified; a cache label or arbitrary player name is no proof.
+                if (translations.get(exact_identity) and self._source_english.get(exact_identity)
+                        and _source_text(self._source_english[exact_identity]) == _source_text(english)):
+                    match['verified_speaker'] = self._source_speakers.get(exact_identity, '')
                 if source_moves_only and exact_identity not in self._source_moves:
                     continue
                 vietnamese = translations.get(exact_identity, "")
@@ -228,6 +267,23 @@ class WahuTranslationProvider:
 def _source_text(text: str) -> str:
     """Ignore whitespace presentation only, not punctuation/placeholders or case."""
     return " ".join(unicodedata.normalize("NFC", text).split())
+
+
+def _equivalent_english(old: str, current: str, aliases: Mapping[str, str]) -> bool:
+    """No fuzzy semantic changes, negation removal, new numbers or ID guessing.
+
+    This is used only *after* exact Chinese, sync-event, version, conversation
+    and reviewed-target proof. It does not relax live OCR matching thresholds.
+    """
+    def canonical(text):
+        text = _source_text(text).replace('’', "'")
+        text = re.sub(r"\b(I|you|we|they|he|she|it) would've\b", r'\1 would have', text, flags=re.I)
+        text = re.sub(r'\bGot it in my head\b', 'Got it into my head', text)
+        if aliases and not text.isascii():
+            pattern = r'(?<!\w)(' + '|'.join(re.escape(a) for a in sorted(aliases,key=len,reverse=True)) + r')(?!\w)'
+            text = re.sub(pattern, lambda m: aliases[m.group()], text)
+        return text
+    return canonical(old) == canonical(current)
 
 
 def apply_configured_wahu_provider(

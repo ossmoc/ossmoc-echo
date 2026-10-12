@@ -1,2 +1,2 @@
 """Application version, independent of WAHU and game data versions."""
-APP_VERSION = '1.0.2'
+APP_VERSION = '1.0.3'

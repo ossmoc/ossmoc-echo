@@ -60,7 +60,7 @@ class AutoInlineOverlay(SubtitleOverlay):
                              text_color=self.auto_settings["text_color"], outline_color=self.auto_settings["outline_color"],
                              outline_width=self.auto_settings["outline_width"], line_spacing=1.0, alignment="left")
         self.auto_blocks = blocks  # refresh invisible source/ID metadata
-        style_keys = ('font_family','font_size','text_color','outline_color','outline_width',
+        style_keys = ('font_family','font_size','choice_font_size','text_color','outline_color','outline_width',
                       'background_color','background_opacity','show_bounds','generation')
         # OCR context IDs and reader scrolling settings aren't display style.
         # Alternating response/story IDs must not release the sentence lock.
@@ -108,7 +108,7 @@ class AutoInlineOverlay(SubtitleOverlay):
             state['count'] = state['count']+1 if consistent else 1
             state['pending'] = QRectF(ink)
             if state['count'] >= 2:
-                state['mask'] = mask.united(rect)
+                state['mask'] = mask if mask.contains(rect) else mask.united(rect)
                 state['ink'] = state['ink'].united(ink)
                 state['pending'] = None; state['count'] = 0
         signature = (tuple((self._block_key(b),
@@ -160,20 +160,21 @@ class AutoInlineOverlay(SubtitleOverlay):
             return None
         sx, sy = self.width()/fw, self.height()/fh
         scale = fh/1080
-        left, right = max(0, x-10*scale), min(fw, x+width+10*scale)
+        # WuWa lays out the complete sentence around the game-frame center
+        # before revealing its glyphs. Mirror genuine ink's outermost reach,
+        # rather than centering on a short, left-hand typewriter fragment.
+        half_width = min(fw/2, max(fw/2-x, x+width-fw/2) + 10*scale)
+        left, right = fw/2-half_width, fw/2+half_width
         top = y
         bottom = max(y+height+4*scale, y+32*scale+4*scale)
         limit_bottom = fh*(.815 if walking else .925)  # Keep the HUD/advance marker untouched.
         if bottom > limit_bottom+1:
             return None
         preferred = QRectF(left*sx, top*sy, (right-left)*sx, (bottom-top)*sy)
-        center = preferred.center().x()
-        maximum = min(center-fw*.05*sx, fw*.95*sx-center)*2
-        if maximum < preferred.width():
-            maximum = preferred.width()
-        base = round(max(18*scale, float(self.auto_settings['font_size'])*scale)*sy)
-        minimum = max(1, round(14*scale*sy))
-        padding = max(3.0, 4*sx)
+        center = fw/2*sx
+        maximum = max(preferred.width(), fw*.90*sx)
+        base = max(1, round(float(self.auto_settings['font_size'])*scale*sy))
+        padding = max(3.0, 4*scale*sx)
 
         def font_for(size):
             font = QFont(self.settings['font_family']); font.setPixelSize(size)
@@ -196,32 +197,18 @@ class AutoInlineOverlay(SubtitleOverlay):
             return QRectF(center-hi/2,rect.y(),hi,rect.height())
 
         font = font_for(base)
-        # Preserve the compact, wrapped presentation of ordinary captions.
-        # A modest reduction here avoids making two readable lines one bar.
-        normal_minimum = max(minimum, round(max(18*scale*sy, base*.7)))
-        for size in range(base, normal_minimum-1, -1):
-            font = font_for(size)
-            if fits(preferred, font):
-                return preferred, font
-        font = font_for(base)
-        # First wrap/extend sideways at the requested size. If needed, borrow
-        # room BELOW the original ink (never above the name), then shrink.
+        if fits(preferred, font):
+            return preferred, font
+        # Wrap at the mirrored English width before widening. Only borrow
+        # space below the ink, never the speaker name or the advance/HUD strip.
         available_height = max(preferred.height(), (limit_bottom-top)*sy)
-        for candidate_height in (preferred.height(), available_height):
-            area = QRectF(center-maximum/2,preferred.y(),maximum,candidate_height)
+        for candidate_width in (preferred.width(), maximum):
+            area = QRectF(center-candidate_width/2,preferred.y(),candidate_width,available_height)
             if fits(area,font):
                 result = compact(area,font)
                 lines = list(self._paragraph_lines(block.target,font,max(1,result.width()-2*padding)))
                 needed = len(lines)*QFontMetricsF(font).height()+2*scale*sy
                 result.setHeight(max(preferred.height(),needed))
-                return result,font
-        area = QRectF(center-maximum/2,preferred.y(),maximum,available_height)
-        for size in range(base-1,minimum-1,-1):
-            font = font_for(size)
-            if fits(area,font):
-                result = compact(area,font)
-                lines = list(self._paragraph_lines(block.target,font,max(1,result.width()-2*padding)))
-                result.setHeight(max(preferred.height(),len(lines)*QFontMetricsF(font).height()+2*scale*sy))
                 return result,font
         # Finite screen space cannot fit arbitrary-length text legibly. Leave
         # English visible and report in the controller; never truncate/move up.
@@ -264,13 +251,12 @@ class AutoInlineOverlay(SubtitleOverlay):
         rect = QRectF(x * sx, y * sy, width * sx, (height + 4 * fh / 1080) * sy)
         if rect.left() < 0 or rect.right() > self.width() or rect.bottom() > self.height():
             return None
-        base = max(18 * fh / 1080, float(self.auto_settings["font_size"]) * fh / 1080) * sy
-        minimum = 14 * fh / 1080 * sy if block.kind == 'choices' else max(18 * fh / 1080 * sy, base * .7)
-        for size in range(round(base), max(1, round(minimum)) - 1, -1):
-            font = QFont(self.settings["font_family"]); font.setPixelSize(size)
-            lines = list(self._paragraph_lines(block.target, font, max(1, rect.width() - max(6, 8 * sx))))
-            if len(lines) * QFontMetricsF(font).height() <= rect.height() - 2 * sy:
-                return rect, font
+        size_key = 'choice_font_size' if block.kind=='choices' else 'font_size'
+        base = max(1, round(float(self.auto_settings[size_key]) * fh / 1080 * sy))
+        font = QFont(self.settings["font_family"]); font.setPixelSize(base)
+        lines = list(self._paragraph_lines(block.target, font, max(1, rect.width() - max(6, 8 * sx))))
+        if len(lines) * QFontMetricsF(font).height() <= rect.height() - 2 * sy:
+            return rect, font
         return None
 
     def paintEvent(self, event):
@@ -290,7 +276,7 @@ class AutoInlineOverlay(SubtitleOverlay):
             painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(bg)
             painter.drawRoundedRect(rect, 3, 3)
             painter.save(); painter.setClipRect(rect)
-            padding = max(3.0, 4*self.width()/self.frame_size[0]) if block.kind == 'dialogue' else 3
+            padding = max(3.0, 4*self.width()/self.frame_size[0]*self.frame_size[1]/1080) if block.kind == 'dialogue' else 3
             area = text_rect.adjusted(padding, 0, -padding, 0)
             self.settings["alignment"] = "center" if block.kind in {"dialogue", "transition"} else "left"
             self._draw_text(painter, block.target, area.top(), font, QColor(self.settings["text_color"]), area)

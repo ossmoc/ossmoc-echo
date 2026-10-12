@@ -48,15 +48,15 @@ def test_overlong_response_has_no_inline_mask_and_is_in_overflow(overlay):
     assert overlay.overflow == [block]
 
 
-def test_one_line_english_answer_can_wrap_vietnamese_inside_button_padding(overlay):
-    block = AutoTextBlock('choices', (1288,500,340,24), 'This is my longtime partner.',
+def test_answer_can_wrap_vietnamese_at_selected_font_inside_button(overlay):
+    block = AutoTextBlock('choices', (1288,500,340,56), 'This is my longtime partner.',
         'Đây là người bạn đã luôn đồng hành cùng tôi.', ('db','Main_1'))
-    next_block = replace(block, bounds=(1288,554,340,24), target='Đáp án tiếp theo')
-    overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080}, (block,next_block), AUTO_DEFAULTS)
+    next_block = replace(block, bounds=(1288,580,340,24), target='Đáp án tiếp theo')
+    overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080}, (block,next_block), {**AUTO_DEFAULTS,'choice_font_size':18})
     area,font=overlay._layout(block)
     assert area.top()>=494 and area.bottom()<=next_block.bounds[1]-12
     assert area.left()==1288 and area.right()<=1690
-    assert font.pixelSize()>=14
+    assert font.pixelSize()==18
     overlay.grab()
     assert not overlay.content_truncated and not overlay.overflow
 
@@ -126,7 +126,8 @@ def test_short_dialogue_background_covers_english_without_full_width_bar(overlay
     # The offscreen Windows plugin can use a wide fallback font; either way
     # this must be compact, not the old 1728px fixed-width strip.
     assert area.width()<1200 and area.left()<=636 and area.right()>=1257
-    assert area.top()==891 and area.bottom()<930
+    assert area.top()==891 and area.bottom()<960 and font.pixelSize()==28
+    assert area.center().x()==960
     assert not overlay.auto_settings['show_bounds']
     assert overlay.auto_settings['background_opacity']==88
 
@@ -146,7 +147,8 @@ def test_two_line_dialogue_wraps_in_original_width_before_expanding(overlay):
         'Qingxiao Tư Kỵ, nếu một ngày Huyền Phương Thành gặp biến cố, ta mong ngươi sẽ rút kiếm vì quân dân nơi đây.',('db','Main_1'))
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(block,),AUTO_DEFAULTS)
     area,font=overlay._layout(block)
-    assert area.width()==934 and area.top()==890 and area.bottom()==967
+    assert area.width()>=940 and area.top()==890 and area.bottom()<=999
+    assert area.center().x()==960 and font.pixelSize()==28
     lines=list(overlay._paragraph_lines(block.target,font,area.width()-8))
     assert len(lines)>=2 and len(lines)*QFontMetricsF(font).height()<=area.height()-2
 
@@ -157,7 +159,7 @@ def test_partial_context_translation_uses_compact_real_caption_bounds(overlay):
     area, font = overlay._layout(block)
     assert area.top()==890 and area.bottom()<=930
     assert area.left()<=500 and area.right()>=900
-    assert area.width()<650
+    assert area.width()==940 and area.center().x()==960
     assert not overlay.overflow
 
 
@@ -177,14 +179,14 @@ def test_clipped_full_translation_stays_below_name_covers_slot_and_never_overflo
     assert not overlay.overflow
 
 
-def test_long_dialogue_borrows_bottom_room_and_shrinks_instead_of_moving_up(overlay):
+def test_long_dialogue_wraps_at_fixed_size_instead_of_moving_up(overlay):
     block=AutoTextBlock('dialogue',(600,890,720,32),'English',
-        'Đây là một đoạn hội thoại dài cần giữ dưới màn hình và xuống dòng đầy đủ. '*7,('db','Main_1'))
+        'Đây là một đoạn hội thoại dài cần giữ dưới màn hình và xuống dòng đầy đủ. '*2,('db','Main_1'))
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(block,),AUTO_DEFAULTS)
     area,font=overlay._layout(block)
     assert area.top()==890 and area.bottom()<=1000
     assert area.left()>=96 and area.right()<=1824
-    assert 14<=font.pixelSize()<28
+    assert font.pixelSize()==28
     assert not overlay.overflow
 
 
@@ -194,7 +196,7 @@ def test_bottom_dialogue_fit_and_painter_share_logical_dpi_padding(overlay, monk
     monkeypatch.setattr(module, 'logical_frame', lambda bounds: (0, 0,
         round(bounds['width']/dpi_scale), round(bounds['height']/dpi_scale)))
     block = AutoTextBlock('dialogue', (504, 877, 902, 117), 'Visible lower lines',
-        'Đây là một đoạn hội thoại dài cần giữ dưới màn hình và xuống dòng đầy đủ. '*7,
+        'Đây là một đoạn hội thoại dài cần giữ dưới màn hình và xuống dòng đầy đủ. '*3,
         ('db', 'Main_1'), partial=True)
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080}, (block,), AUTO_DEFAULTS)
     assert not overlay.overflow
@@ -203,7 +205,7 @@ def test_bottom_dialogue_fit_and_painter_share_logical_dpi_padding(overlay, monk
     area, font = overlay._layout(block)
     assert area.top()*dpi_scale >= 847
     assert area.bottom()*dpi_scale <= 1000
-    assert font.pixelSize()*dpi_scale >= 13.5
+    assert font.pixelSize()==round(28/dpi_scale)
 
 
 @pytest.mark.parametrize('bounds',[(-5,890,900,32),(500,500,900,32),(500,890,0,32),(500,890,1800,32)])
@@ -217,7 +219,7 @@ def test_short_caption_ink_height_has_room_for_vietnamese_descenders(overlay):
     block=AutoTextBlock('dialogue',(809,891,301,24),'So the time has come.','Đã đến lúc rồi sao?',('db','Main_1'))
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(block,),AUTO_DEFAULTS)
     area,font=overlay._layout(block)
-    assert area.top()==891 and area.bottom()<=927 and font.pixelSize()>=20
+    assert area.top()==891 and area.bottom()<=960 and font.pixelSize()==28
 
 
 def test_glossary_masks_real_text_only_and_fits_without_covering_close_icon(overlay):
@@ -277,7 +279,7 @@ def test_partial_full_toggle_cannot_rewrap_same_verified_sentence(overlay):
     overlay.set_frame(bounds,(fragment,),AUTO_DEFAULTS)
     assert overlay._layout(fragment)[0].getRect()==original
     assert overlay._mask_rect(fragment).top()==890
-    assert 965<=overlay._mask_rect(fragment).bottom()<980
+    assert 965<=overlay._mask_rect(fragment).bottom()<=999
     expanded=overlay._mask_rect(fragment).getRect()
     for observation in (block,fragment,block):
         overlay.set_frame(bounds,(observation,),AUTO_DEFAULTS)
@@ -314,7 +316,7 @@ def test_partial_flag_does_not_expand_mask_when_visible_ink_shrinks(overlay):
 def test_partial_flag_has_identical_compact_layout_as_full_sentence(overlay,monkeypatch,mode,y,dpi_scale):
     monkeypatch.setattr(module,'logical_frame',lambda bounds:(0,0,round(1920/dpi_scale),round(1080/dpi_scale)))
     block=AutoTextBlock('dialogue',(500,y,920,72),'English',
-        'Không ngờ quanh làng lại xuất hiện Tàn Tượng. Giá mà vẫn có Cơ Khôi như trước kia đến đối phó với chúng thì tốt biết mấy.',
+        'Không ngờ quanh làng lại xuất hiện Tàn Tượng. Giá mà vẫn có Cơ Khôi như trước kia.',
         ('db','Main_1'),caption_mode=mode)
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(block,),AUTO_DEFAULTS)
     full=overlay._calculate_layout(block)
@@ -324,7 +326,8 @@ def test_partial_flag_has_identical_compact_layout_as_full_sentence(overlay,monk
     assert partial[0].getRect()==full[0].getRect()
     assert partial[1].pixelSize()==full[1].pixelSize()
     assert partial[0].top()*dpi_scale==pytest.approx(y)
-    assert partial[0].height()*dpi_scale<80
+    assert partial[0].height()*dpi_scale<90
+    assert partial[1].pixelSize()==round(28/dpi_scale)
     overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(fragment,),AUTO_DEFAULTS)
     overlay.grab()
     assert not overlay.content_truncated and not overlay.overflow
@@ -387,3 +390,38 @@ def test_walking_layout_stays_below_speaker_and_above_hud(overlay,monkeypatch,dp
     assert rect.top()*dpi_scale>=796.9 and rect.bottom()*dpi_scale<=881
     overlay.grab()
     assert not overlay.overflow and not overlay.content_truncated
+
+
+@pytest.mark.parametrize('dpi_scale', [1,1.25,1.5])
+def test_first_typewriter_letters_mirror_about_game_center_without_reflow(overlay,monkeypatch,dpi_scale):
+    monkeypatch.setattr(module,'logical_frame',lambda b:(0,0,round(1920/dpi_scale),round(1080/dpi_scale)))
+    bounds={'left':0,'top':0,'width':1920,'height':1080}
+    first=AutoTextBlock('dialogue',(500,890,45,28),'First','Bản dịch giữ ở giữa.',('db','Main_1'),partial=True)
+    overlay.set_frame(bounds,(first,),{**AUTO_DEFAULTS,'font_size':24})
+    area,font=overlay._layout(first)
+    assert area.center().x()==pytest.approx(overlay.width()/2)
+    assert area.left()*dpi_scale<=500 and area.right()*dpi_scale>=1420
+    assert font.pixelSize()==round(24*overlay.height()/1080)
+    signature=overlay.content_signature
+    full=replace(first,bounds=(500,890,920,28),partial=False,source='Full original sentence')
+    overlay.set_frame(bounds,(full,),{**AUTO_DEFAULTS,'font_size':24})
+    overlay.set_frame(bounds,(full,),{**AUTO_DEFAULTS,'font_size':24})
+    assert overlay._layout(full)[0].getRect()==area.getRect()
+    assert overlay.content_signature is signature
+
+
+def test_impossible_fixed_font_text_keeps_english_without_shrink_or_top_box(overlay):
+    bounds={'left':0,'top':0,'width':1920,'height':1080}
+    block=AutoTextBlock('dialogue',(500,890,920,32),'English','Quá dài '*500,('db','Main_1'))
+    overlay.set_frame(bounds,(block,),{**AUTO_DEFAULTS,'font_size':32})
+    assert overlay._layout(block) is None and overlay._mask_rect(block) is None
+    assert overlay.overflow==[block]
+    overlay.grab()
+    assert not overlay.drawn_bounds and not overlay.content_truncated
+
+
+def test_choices_cannot_silently_shrink_selected_font(overlay):
+    block=AutoTextBlock('choices',(1288,500,340,24),'English',
+        'Đây là người bạn đã luôn đồng hành cùng tôi.',('db','Main_1'))
+    overlay.set_frame({'left':0,'top':0,'width':1920,'height':1080},(block,),{**AUTO_DEFAULTS,'choice_font_size':40})
+    assert overlay._layout(block) is None and overlay.overflow==[block]

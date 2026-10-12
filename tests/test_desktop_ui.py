@@ -130,6 +130,8 @@ def test_single_style_form_changes_actual_auto_not_old_overlay(panel):
     assert not hasattr(panel,'_overlay_widgets')
     panel._auto_style_widgets['font_size'].setValue(35)
     assert panel.controller.calls[-1]==('update_auto_settings',(),{'font_size':35})
+    panel._auto_style_widgets['choice_font_size'].setValue(22)
+    assert panel.controller.calls[-1]==('update_auto_settings',(),{'choice_font_size':22})
     assert 'font-size: 32px' in panel.style_preview.styleSheet()
     panel.background_preset.setCurrentIndex(panel.background_preset.findData('none'))
     assert panel.controller.raw['auto_wuwa']['background_opacity']==0

@@ -379,7 +379,7 @@ class DesktopController(QObject):
         if "mode" in allowed and allowed["mode"] not in ("regions", "auto"):
             return
         settings = {**self.raw["auto_wuwa"], **allowed}
-        for key in ("font_size", "reader_font_size", "outline_width", "background_opacity"):
+        for key in ("font_size", "choice_font_size", "reader_font_size", "outline_width", "background_opacity"):
             if key in allowed:
                 low, high = (0, 100) if key == "background_opacity" else (0, 8) if key == "outline_width" else (14, 64)
                 try:

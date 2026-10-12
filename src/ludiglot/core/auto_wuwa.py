@@ -43,6 +43,7 @@ class VerifiedText:
     english: str
     vietnamese: str
     partial: bool = False
+    speaker: str = ""
 
 
 
@@ -114,7 +115,7 @@ class AutoTextIndex:
                     continue
                 vi = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", vi, flags=re.I)))
                 vi = vi.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
-                record = VerifiedText(identity, en, vi)
+                record = VerifiedText(identity, en, vi, speaker=str(item.get('verified_speaker') or ''))
                 if identity in records and records[identity] != record:
                     ambiguous.add(identity)
                 else:
@@ -262,8 +263,8 @@ class AutoTextIndex:
                 continue
             found = pattern.fullmatch(source.strip())
             if found and "{" not in found['player']:
-                matches.append(VerifiedText(record.identity, record.english,
-                    record.vietnamese.replace("{PlayerName}", found['player'].strip())))
+                matches.append(replace(record,
+                    vietnamese=record.vietnamese.replace("{PlayerName}", found['player'].strip())))
         return self._unique(matches) or self._unique(self._scoped(matches))
 
     def resolve(self, source: str, kind: str) -> VerifiedText | None:
@@ -781,8 +782,9 @@ class AutoWuwaProcessor:
         if wide:
             self._next_discovery = now + 1.5
         cinematic = not black and settings.get('dialogue', True) and dialogue_chrome(image)
-        walking = not black and settings.get('dialogue',True) and settings.get('walking',True) and walking_chrome(image)
+        walking = not black and not cinematic and settings.get('dialogue',True) and settings.get('walking',True) and walking_chrome(image)
         walking_confirmed = False
+        walking_named = False
         speaker = cinematic or walking
         # During a known dialogue, expensive document discovery runs less
         # often. Losing the speaker immediately unlocks full discovery.
@@ -794,9 +796,9 @@ class AutoWuwaProcessor:
         kinds = ["transition"] if black else ["glossary_label", "glossary", "title", "document", "choices", "walking_speaker", "walking_dialogue", "dialogue"]
         for kind in kinds:
             control = 'dialogue' if kind.startswith('walking_') else 'glossary' if kind == 'glossary_label' else 'document' if kind == 'title' else kind
-            if kind.startswith('walking_') and (not walking or (kind=='walking_dialogue' and not walking_confirmed)):
+            if kind.startswith('walking_') and not walking:
                 continue
-            if kind == 'dialogue' and walking_confirmed:
+            if kind == 'dialogue' and walking:
                 continue
             urgent = speaker and kind in {'dialogue','choices','glossary_label','glossary','walking_speaker','walking_dialogue'}
             if not force and kind in {'title','document'} and not information:
@@ -869,11 +871,22 @@ class AutoWuwaProcessor:
                 self._ocr_cache[kind] = (signature, boxes, now)
             observed[kind] = boxes
             if kind == 'walking_speaker':
-                walking_confirmed = any(normalized(text) in self.index.speaker_names
+                walking_named = any(normalized(text) in self.index.speaker_names
                     and abs(rect[0]+rect[2]/2-width/2)<width*.08
                     and rect[2]<width*.25 for text,rect in grouped_rows(boxes,paragraph=True))
+                walking_confirmed = walking_named
             elif kind == 'walking_dialogue':
                 observed['dialogue'] = boxes
+                # A custom player name need not OCR as the database's "Rover".
+                # Gold speaker-layout evidence permits reading this band, not
+                # translating it blindly. Require a verified player-role line
+                # and a complete match; context-only fragments cannot bypass
+                # the unknown-speaker gate or turn HUD labels into dialogue.
+                if not walking_confirmed:
+                    walking_confirmed = any(record and not record.partial
+                        and normalized(record.speaker) == 'rover'
+                        for text,_ in grouped_rows(boxes,paragraph=True)
+                        for record in [self._lookup(self.index.resolve,text,'dialogue')])
             if kind == 'choices':
                 # A verified response in this very frame can establish scene
                 # context before contrast/CPU retries of the clipped dialogue.
@@ -914,6 +927,10 @@ class AutoWuwaProcessor:
                 detected.append(kind)
                 texts.append((kind, text))
                 record = self._lookup(self.index.resolve,text, kind)
+                if (record and kind=='dialogue' and walking
+                        and not walking_named
+                        and (record.partial or normalized(record.speaker) != 'rover')):
+                    record = None
                 if record:
                     blocks.append(AutoTextBlock(kind, bounds, text, record.vietnamese, record.identity, order, record.partial,
                                                 'walking' if kind=='dialogue' and walking_confirmed else 'cinematic'))

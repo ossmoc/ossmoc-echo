@@ -55,7 +55,14 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
     next_answer = replace(answer,bounds=(answer.bounds[0],round(height*.57),answer.bounds[2],answer.bounds[3]),target='Đáp án tiếp theo',order=2)
     inline.set_frame(bounds,(answer,next_answer),settings); app.processEvents()
     inline.grab().save(str(report_path.with_suffix('.answer-native.png')))
-    result['answer_wrap_without_top_box'] = not inline.overflow and not inline.content_truncated
+    # Fixed-font text may legitimately exceed an original answer button.
+    # In that case keep English; never shrink, clip or open a top fallback.
+    expected_font = max(1,round(settings['choice_font_size']*inline.height()/1080))
+    result['answer_fixed_font_without_top_box'] = not inline.content_truncated and all(
+        (layout[1].pixelSize()==expected_font) if (layout:=inline._layout(block))
+        else block in inline.overflow and inline._mask_rect(block) is None
+        for block in (answer,next_answer))
+    result['answer_inline_blocks'] = 2-len(inline.overflow)
     inline.set_frame(bounds,(sample,),settings)
     frozen_layout=inline._layout(sample)
     signature=inline.content_signature
@@ -143,7 +150,7 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
     result["success"] = all(result[k] for k in ("inline_capture_excluded", "inline_click_through", "inline_no_focus",
         "reader_capture_excluded", "reader_no_initial_focus", "reader_preserves_scroll", "reader_stays_dismissed", "fallback_capture_excluded",
         "inline_positive_control", "reader_positive_control", "fallback_positive_control"))
-    result['success'] = result['success'] and result['answer_wrap_without_top_box']
+    result['success'] = result['success'] and result['answer_fixed_font_without_top_box']
     result['success'] = result['success'] and result['same_sentence_presentation_stable']
     result['success'] = result['success'] and result['native_matching_backend']
     if 'cpu_fallback' in result:

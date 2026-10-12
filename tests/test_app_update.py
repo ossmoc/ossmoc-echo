@@ -27,7 +27,7 @@ def package(extra=(), contents=None):
 
 
 def release(data):
-    return AppRelease('v1.0.3', 'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.0.3/OssmocEcho-v1.0.3-Windows-x64.zip',
+    return AppRelease('v1.0.4', 'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.0.4/OssmocEcho-v1.0.4-Windows-x64.zip',
                       len(data), hashlib.sha256(data).hexdigest())
 
 
@@ -35,12 +35,13 @@ def opener_for(data):
     return lambda request, **kwargs: io.BytesIO(data)
 
 
-def test_version_is_102_and_independent_of_translation():
-    assert APP_VERSION == '1.0.2'
+def test_version_is_103_and_independent_of_translation():
+    assert APP_VERSION == '1.0.3'
     assert version_tuple('v1.10.0') > version_tuple('v1.9.9')
     assert not AppRelease('v1.0.1', '', 0, '').available
     assert not AppRelease('v1.0.0', '', 0, '').available
-    assert 'v1.0.2' in AppRelease('v1.0.2', '', 0, '').summary
+    assert not AppRelease('v1.0.3', '', 0, '').available
+    assert 'v1.0.3' in AppRelease('v1.0.2', '', 0, '').summary
     assert 'v1.0.3' in AppRelease('v1.0.3', '', 0, '').summary
 
 
@@ -61,7 +62,7 @@ def test_only_official_release_urls(url):
 def github_response(data, **changes):
     asset = release(data)
     return {'tag_name': asset.tag, 'draft': False, 'prerelease': False,
-            'assets': [{'name': 'OssmocEcho-v1.0.3-Windows-x64.zip', 'size': asset.size,
+            'assets': [{'name': 'OssmocEcho-v1.0.4-Windows-x64.zip', 'size': asset.size,
                         'browser_download_url': asset.url, 'digest': 'sha256:' + asset.sha256}], **changes}
 
 
@@ -76,12 +77,12 @@ def test_checksum_asset_fallback(tmp_path):
     value = github_response(data)
     value['assets'][0]['digest'] = ''
     value['assets'].append({'name': 'SHA256SUMS.txt', 'browser_download_url':
-        'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.0.3/SHA256SUMS.txt'})
+        'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.0.4/SHA256SUMS.txt'})
     seen = []
     def opener(request, **kwargs):
         seen.append(request.full_url)
         return io.BytesIO(json.dumps(value).encode() if request.full_url == RELEASE_API else
-                         f'{hashlib.sha256(data).hexdigest()}  OssmocEcho-v1.0.3-Windows-x64.zip\n'.encode())
+                         f'{hashlib.sha256(data).hexdigest()}  OssmocEcho-v1.0.4-Windows-x64.zip\n'.encode())
     assert AppUpdater(tmp_path, opener=opener).check_latest().sha256 == release(data).sha256
     assert len(seen) == 2
 

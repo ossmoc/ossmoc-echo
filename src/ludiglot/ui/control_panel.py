@@ -172,7 +172,7 @@ class ControlPanel(QMainWindow):
         form = QFormLayout(); form.setVerticalSpacing(14)
         font = QFontComboBox(); font.currentFontChanged.connect(lambda value:self._auto_change(font_family=value.family()))
         self._auto_style_widgets['font_family']=font; form.addRow('Phông chữ',font)
-        for key,label,low,high in (('font_size','Cỡ chữ',18,64),('outline_width','Độ dày viền',0,8),('background_opacity','Độ đậm nền',0,100)):
+        for key,label,low,high in (('font_size','Cỡ chữ hội thoại / thông tin',18,64),('choice_font_size','Cỡ chữ đáp án',18,64),('outline_width','Độ dày viền',0,8),('background_opacity','Độ đậm nền',0,100)):
             spin = QSpinBox(); spin.setRange(low,high); spin.setSuffix(' %' if key=='background_opacity' else ' px')
             spin.valueChanged.connect(lambda value,k=key:self._auto_change(**{k:value})); self._auto_style_widgets[key]=spin; form.addRow(label,spin)
         self.background_preset = QComboBox()

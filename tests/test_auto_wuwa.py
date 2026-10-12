@@ -31,6 +31,16 @@ def test_auto_migration_is_opt_in_and_preserves_custom_fields():
     assert result["overlay"]["background"] == "none"
 
 
+def test_fixed_answer_font_migrates_independently_without_changing_dialogue_font():
+    original={'auto_wuwa':{'font_size':38,'background_color':'#334455','context_hint':'Main_Test_3_6_1_1'}}
+    migrated=migrate_desktop_settings(original)['auto_wuwa']
+    assert migrated['font_size']==38 and migrated['choice_font_size']==20
+    assert migrated['background_color']=='#334455'
+    assert migrated['context_hint']=='Main_Test_3_6_1_1'
+    custom=migrate_desktop_settings({'auto_wuwa':{'font_size':38,'choice_font_size':24}})['auto_wuwa']
+    assert custom['choice_font_size']==24 and custom['font_size']==38
+
+
 def test_only_verified_provider_and_allowed_source_families_are_admitted():
     en = "Please stay here while I look for the missing cartridges."
     assert index(entry("Side_Test_1", en, "Ở lại nhé")).resolve(en, "dialogue")
@@ -431,6 +441,32 @@ def test_walking_dialogue_requires_exact_game_speaker_and_verified_source():
     assert search.context_hint=='Main_Mengzhou_3_6_40_2'
     # A speaker's English name is sufficient; it needn't have a Vietnamese name.
     assert 'abby' in search.speaker_names
+
+
+@pytest.mark.parametrize('name',['Ossmoc','smoc',''])
+def test_custom_player_name_uses_verified_rover_role_after_reading_caption(name):
+    image,story,responses=walking_fixture()
+    responses.update(dict([crop_response('walking_speaker',
+        [box(name,x=930,y=730,w=90,h=30)] if name else [])]))
+    player=entry('Main_Mengzhou_3_6_121_5',story,'Thoại của người chơi')
+    player['verified_speaker']='Rover'
+    processor=AutoWuwaProcessor(index(player))
+    result=processor.process(image,Engine(responses),AUTO_DEFAULTS,backend='test',force=True)
+    assert len(result.blocks)==1 and result.blocks[0].caption_mode=='walking'
+    assert result.blocks[0].target=='Thoại của người chơi'
+
+
+@pytest.mark.parametrize('problem',['no_role','npc','hud','unverified','no_gold'])
+def test_unknown_player_label_never_authorizes_unverified_or_hud_text(problem):
+    image,story,responses=walking_fixture()
+    responses.pop(crop_response('walking_speaker',[])[0])
+    item=entry('ItemInfo_123_Description' if problem=='hud' else 'Main_Mengzhou_3_6_121_5',
+        story,'Không được che',verified=problem!='unverified')
+    item['verified_speaker']='Abby' if problem=='npc' else '' if problem=='no_role' else 'Rover'
+    if problem=='no_gold':
+        image=Image.new('RGB',(1920,1080),'#334466')
+    result=AutoWuwaProcessor(index(item)).process(image,Engine(responses),AUTO_DEFAULTS,backend='test',force=True)
+    assert not result.blocks
 
 
 @pytest.mark.parametrize('problem',['no_name','wrong_name','no_gold','disabled','unverified'])
