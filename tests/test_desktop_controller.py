@@ -403,10 +403,13 @@ def test_open_check_does_not_skip_recent_cached_release(controller, monkeypatch)
     controller.raw["translation_checked_at"] = time.time()
     marker = object()
     monkeypatch.setattr(controller, "_updater", lambda: SimpleNamespace(check_latest=lambda: marker))
+    monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: 'app release'))
     calls = []
     monkeypatch.setattr(controller, "_start_job", lambda kind, work: calls.append((kind, work())))
     controller.check_updates(force=False)
-    assert calls == [("check", marker)]
+    assert calls == [("check", {'translation': marker, 'app': 'app release'})]
+    controller.check_updates(force=False)
+    assert len(calls) == 1
 
 
 def test_current_release_has_short_status_and_never_prompts_download(controller, monkeypatch):
@@ -430,6 +433,40 @@ def test_new_release_has_one_line_and_does_not_trust_cached_latest(controller, m
     controller._on_job_finished({"kind": "check", "result": ReleaseInfo("v3.0.16", body="README", game_version="3.7")})
     assert controller.update_summary == "Có bản cập nhật mới"
     assert controller.update_available is True
+
+
+def test_joint_check_keeps_app_result_when_translation_network_fails(controller, monkeypatch):
+    from types import SimpleNamespace
+    from ludiglot.core.app_update import AppRelease
+    def offline(): raise OSError('offline translation')
+    app_release = AppRelease('v1.0.2', '', 10, '')
+    monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
+    monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
+    controller.check_updates()
+    assert controller.app_update_available and 'v1.0.2' in controller.app_update_summary
+    assert not controller.update_available
+    assert 'Không kiểm tra' in controller.update_summary
+
+
+def test_joint_check_keeps_translation_result_when_app_network_fails(controller, monkeypatch):
+    from types import SimpleNamespace
+    from ludiglot.core.translation_update import ReleaseInfo
+    def offline(): raise OSError('offline app')
+    monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(
+        check_latest=lambda: ReleaseInfo('v3.0.16', game_version='3.7'), active_manifest=lambda:{'release_tag':'v3.0.16'}))
+    monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=offline))
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
+    controller.check_updates()
+    assert not controller.update_available and 'Đã là bản mới nhất' in controller.update_summary
+    assert not controller.app_update_available and 'Không kiểm tra' in controller.app_update_summary
+
+
+def test_translation_label_uses_friendly_name(controller, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(controller, '_updater', lambda:SimpleNamespace(active_manifest=lambda:{'release_tag':'v3.0.16'}))
+    assert 'Bản dịch đang dùng: v3.0.16' in controller.translation_version_summary
+    assert 'WAHU đang dùng' not in controller.translation_version_summary
 
 
 def test_realtime_hotkey_can_turn_off_and_back_on_last_region_without_stopping_intent(controller):

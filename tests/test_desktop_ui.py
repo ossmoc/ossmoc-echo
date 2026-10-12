@@ -25,12 +25,13 @@ class FakeController(QObject):
         self.raw={'auto_wuwa':{},'window_capture':{'mode':'window','target':{'title':'Wuthering Waves'}},'hotkey_capture':'Alt+W'}
         self.status='Sẵn sàng'; self.ready=True; self.session=SimpleNamespace(running=False)
         self.logs=['Sẵn sàng']; self.history=[{'text':'Chào Jinhsi'}]
-        self.data_summary='100 câu Việt'; self.translation_version_summary='WAHU v3.0.16 · WuWa 3.7'
+        self.data_summary='100 câu Việt'; self.translation_version_summary='Bản dịch đang dùng: v3.0.16 · WuWa 3.7'
+        self.app_version='1.0.1'; self.app_update_summary='Ossmoc Echo đã là bản mới nhất (v1.0.1)'; self.app_update_available=False
         self.update_summary='Đã là bản mới nhất Wuthering Waves 3.7'; self.update_available=False
         self.story_options=(StoryGroup('Main_LahaiRoi_3_1','3.1 · Lahai-Roi','3.1','Main_LahaiRoi_3_1_1_1',10),
                             StoryGroup('Main_Mengzhou_3_6','3.6 · Mengzhou','3.6','Main_Mengzhou_3_6_20_1',12))
     def __getattr__(self,name):
-        if name in {'choose_game_window','toggle_realtime','check_updates','download_update','rescan_game','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
+        if name in {'choose_game_window','toggle_realtime','check_updates','download_update','download_app_update','rescan_game','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
             return lambda *a,**k:self.calls.append((name,a,k))
         raise AttributeError(name)
     def update_auto_settings(self,**values):
@@ -149,7 +150,22 @@ def test_update_is_short_and_download_requires_new_release(panel):
     panel.controller.update_summary='Có bản cập nhật mới'; panel.controller.update_available=True; panel.refresh_data()
     assert panel.overview_update_label.text()=='Có bản cập nhật mới' and panel.download_button.isEnabled()
     panel.controller.update_available=False; panel.refresh_data(); assert not panel.download_button.isEnabled()
-    assert 'WAHU v3.0.16' in panel.translation_version_label.text()
+    assert 'Bản dịch đang dùng: v3.0.16' in panel.translation_version_label.text()
+
+
+def test_app_update_is_separate_and_unneeded_data_actions_removed(panel):
+    texts=[w.text() for w in panel.findChildren(QPushButton)]
+    assert 'Phục hồi bản trước' not in texts and 'Nhập bản dịch' not in texts
+    assert 'Chuẩn bị / làm mới dữ liệu English' in texts
+    assert 'v1.0.1' in panel.app_version_label.text()
+    assert not panel.app_download_button.isEnabled()
+    panel.controller.app_update_available=True
+    panel.controller.app_update_summary='Có bản cập nhật Ossmoc Echo v1.0.2'; panel.refresh_data()
+    assert panel.app_download_button.isEnabled()
+    panel.app_download_button.click(); assert panel.controller.calls[-1][0]=='download_app_update'
+    panel.check_update_button.click(); assert panel.controller.calls[-1]==('check_updates',(),{'force':True})
+    panel.controller._checking_updates=True; panel.refresh_data()
+    assert not panel.check_update_button.isEnabled() and not panel.app_download_button.isEnabled()
 
 
 def test_logs_plain_history_copy_complete_and_advanced_collapsed(panel,app):

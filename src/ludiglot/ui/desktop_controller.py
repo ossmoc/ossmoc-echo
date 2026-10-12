@@ -19,6 +19,7 @@ from PyQt6.QtGui import QDesktopServices, QGuiApplication, QTextDocument
 from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ludiglot.core.app_paths import AppPaths
+from ludiglot.version import APP_VERSION
 from ludiglot.core.config import load_config
 from ludiglot.core.desktop_models import AUTO_DEFAULTS, OcrRegion, display_signature, migrate_desktop_settings, count_translation_coverage, normalize_auto_settings
 from ludiglot.core.display_shaper import DisplayPreferences, shape_translation_display
@@ -82,6 +83,11 @@ class DesktopController(QObject):
         self.update_summary = "Chưa kiểm tra bản dịch mới."
         self.latest_release = None
         self.update_available = False
+        self.app_version = APP_VERSION
+        self.latest_app_release = None
+        self.app_update_available = False
+        self.app_update_summary = 'Chưa kiểm tra cập nhật app.'
+        self._launch_update_check_done = False
         self.engine = self.matcher = self.param_resolver = None
         self._hotkeys = None
         self._hotkey_edit_depth = 0
@@ -284,7 +290,7 @@ class DesktopController(QObject):
             manifest = self._updater().active_manifest() or {}
         except Exception:
             manifest = {}
-        return (f"WAHU đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
+        return (f"Bản dịch đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
                 f"WuWa được bản dịch hỗ trợ: {manifest.get('translation_game_version') or 'chưa xác định'}\n"
                 f"Dữ liệu game đã quét: {self.raw.get('official_source_version') or 'chưa xác định'}")
 
@@ -1267,15 +1273,22 @@ class DesktopController(QObject):
             tool = Path(sys.executable).parent / "tools" / "FModelCLI.exe"
         return TranslationUpdater(self.paths.updates, tool_path=tool, source_version=self.raw.get("official_source_version"), source_data_root=self.config.data_root, database_path=self.config.wahu_db_path)
 
+    def _app_updater(self):
+        import sys
+        from ludiglot.core.app_update import AppUpdater
+        application = Path(sys.executable).parent if getattr(sys, 'frozen', False) else self.paths.resource_root
+        return AppUpdater(application)
+
     def _start_job(self, kind, work, *, pause=False):
         if self._maintenance or (kind == "check" and self._checking_updates):
-            self._set_status("Một tác vụ dữ liệu đang chạy; hãy đợi hoặc bấm Hủy.")
+            self._set_status("Một tác vụ đang chạy; hãy đợi hoàn tất.")
             return
         if kind == "check":
             self._checking_updates = True
         else:
             self._maintenance = True
         self._job_cancel.clear()
+        self.data_changed.emit()
         running = self.session.running
         if pause:
             self.session.pause()
@@ -1289,9 +1302,52 @@ class DesktopController(QObject):
         threading.Thread(target=worker, daemon=True).start()
 
     def check_updates(self, force=True):
-        # One live check on every launch; force remains for UI/API compatibility.
-        self._set_status("Đang kiểm tra bản dịch mới…")
-        self._start_job("check", lambda: self._updater().check_latest())
+        if self._checking_updates:
+            return
+        if not force and self._launch_update_check_done:
+            return
+        if self._maintenance:
+            if not force:
+                QTimer.singleShot(2000, lambda: self.check_updates(force=False))
+            return
+        self._launch_update_check_done = True
+        self._set_status("Đang kiểm tra cập nhật app và bản dịch…")
+        def work():
+            # One endpoint may fail without hiding the other endpoint's result.
+            results = {}
+            for name, factory in (('translation', self._updater), ('app', self._app_updater)):
+                try:
+                    results[name] = factory().check_latest()
+                except Exception as exc:
+                    results[name + '_error'] = str(exc)
+            return results
+        self._start_job("check", work)
+
+    def download_app_update(self):
+        import sys
+        if not self.latest_app_release:
+            self.check_updates()
+            return
+        if not self.latest_app_release.available:
+            self._set_status(self.latest_app_release.summary)
+            return
+        if not getattr(sys, 'frozen', False):
+            self._set_status('Bản chạy từ source: tải EXE mới từ GitHub Releases.')
+            QDesktopServices.openUrl(QUrl('https://github.com/ossmoc/ossmoc-echo/releases/latest'))
+            return
+        application = Path(sys.executable).parent.resolve()
+        game = self.raw.get('game_install_root')
+        if game and application.is_relative_to(Path(game).resolve()):
+            self._set_status('Hãy chuyển Ossmoc Echo ra ngoài thư mục game trước khi cập nhật app.')
+            return
+        release = self.latest_app_release
+        if QMessageBox.question(None, 'Cập nhật Ossmoc Echo',
+                f'Tải {release.tag} ({release.size / 1024**2:.0f} MiB)?\n'
+                'Sau khi tải và kiểm tra xong, app sẽ đóng và mở lại.\n'
+                'Giữ nguyên cấu hình, tiến trình và dữ liệu bản dịch.') != QMessageBox.StandardButton.Yes:
+            return
+        self._start_job('app-install', lambda: self._app_updater().prepare(release,
+                        cancel=self._job_cancel, progress=self._status.emit))
 
     def _refresh_update_status(self, manifest=None):
         if self.latest_release is None:
@@ -1344,24 +1400,54 @@ class DesktopController(QObject):
             if payload["kind"] == "check":
                 self.update_available = False
                 self.update_summary = "Không kiểm tra được cập nhật"
+                self.app_update_available = False
+                self.app_update_summary = 'Không kiểm tra được cập nhật app.'
                 self._set_status(self.update_summary)
                 self.log_message.emit(payload["error"])
                 self.data_changed.emit()
                 return
-            self._set_status("Tác vụ dữ liệu thất bại; giữ bản cũ. " + payload["error"])
+            self._set_status("Cập nhật app thất bại; giữ bản đang dùng. " + payload["error"] if payload['kind']=='app-install'
+                             else "Tác vụ dữ liệu thất bại; giữ bản cũ. " + payload["error"])
             self.log_message.emit(self.status)
             if payload.get("resume"):
                 self.session.resume()
             self.data_changed.emit()
             return
         if payload["kind"] == "check":
-            release = payload["result"]
-            self.latest_release = release
-            self.raw.update(translation_checked_at=time.time(), latest_translation_release=release.to_dict())
-            self.store.update_values(translation_checked_at=self.raw["translation_checked_at"], latest_translation_release=release.to_dict())
-            self._refresh_update_status()
-            self._set_status(self.update_summary)
+            result = payload['result']
+            result = result if isinstance(result, dict) else {'translation': result}  # Existing API callers.
+            if 'translation' in result:
+                release = result['translation']
+                self.latest_release = release
+                self.raw.update(translation_checked_at=time.time(), latest_translation_release=release.to_dict())
+                self.store.update_values(translation_checked_at=self.raw['translation_checked_at'], latest_translation_release=release.to_dict())
+                self._refresh_update_status()
+            elif 'translation_error' in result:
+                self.latest_release = None
+                self.update_available = False
+                self.update_summary = 'Không kiểm tra được cập nhật bản dịch.'
+                self.log_message.emit(result['translation_error'])
+            if 'app' in result:
+                self.latest_app_release = result['app']
+                self.app_update_available = self.latest_app_release.available
+                self.app_update_summary = self.latest_app_release.summary
+            elif 'app_error' in result:
+                self.latest_app_release = None
+                self.app_update_available = False
+                self.app_update_summary = 'Không kiểm tra được cập nhật app.'
+                self.log_message.emit(result['app_error'])
+            self._set_status(self.app_update_summary if self.app_update_available else self.update_summary)
             self.data_changed.emit()
+        elif payload['kind'] == 'app-install':
+            try:
+                self._app_updater().launch(payload['result'])
+            except Exception as exc:
+                self._set_status('Không thay được app; giữ bản đang dùng. ' + str(exc))
+                self.log_message.emit(self.status)
+                self.data_changed.emit()
+                return
+            self._set_status('Đang đóng app để cài bản mới…')
+            QApplication.instance().quit()
         else:
             result = payload["result"]
             self.session.close()
@@ -1395,7 +1481,7 @@ class DesktopController(QObject):
             if not root:
                 return
         # Explicit user-selected source version: never silently pick newest AES keys.
-        version, ok = QInputDialog.getText(None, "Phiên bản game", "Phiên bản game đang cài (ví dụ 3.7). Không dùng phiên bản WAHU:", text=str(self.raw.get("official_source_version") or self.raw.get("game_version") or ""))
+        version, ok = QInputDialog.getText(None, "Phiên bản game", "Phiên bản Wuthering Waves đang cài (ví dụ 3.7):", text=str(self.raw.get("official_source_version") or self.raw.get("game_version") or ""))
         if not ok or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version.strip()):
             self._set_status("Đã hủy: cần phiên bản game hợp lệ để chọn dữ liệu giải nén.")
             return

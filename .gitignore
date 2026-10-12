@@ -14,3 +14,6 @@ config/settings.json
 *.onnx
 *.exe
 .env
+build/
+dist/
+*.egg-info/

@@ -111,7 +111,10 @@ def run_desktop(config_path: Path | None = None, smoke_report: Path | None = Non
                         ocr_check["error"] = str(exc)
                 controller.overlay.verify_capture_exclusion()
                 panel.grab().save(str(smoke_report.with_suffix(".panel.png")))
-                ui_check = {'pages':[panel.navigation.item(i).text() for i in range(panel.navigation.count())],
+                ui_check = {'app_version':controller.app_version,
+                            'app_update_summary':controller.app_update_summary,
+                            'translation_label':panel.translation_version_label.text().split('\n')[0],
+                            'pages':[panel.navigation.item(i).text() for i in range(panel.navigation.count())],
                             'brand':panel.windowTitle(), 'manual_regions_removed':not hasattr(panel,'region_table'),
                             'only_start_hotkey':len(controller._bindings(controller.raw,controller.regions))<=1,
                             'auto_only':controller.auto_only and controller.auto_mode}
