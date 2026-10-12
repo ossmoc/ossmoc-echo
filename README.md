@@ -45,6 +45,3 @@ Repo công khai không phải biện pháp ngăn sao chép; lịch sử Git, b�
 nguồn gốc và ghi công được giữ rõ ràng. Không áp thêm điều khoản chống
 fork/clone trái với GPL. Tên dự án không có nghĩa là một fork được Ossmoc
 hỗ trợ hoặc là bản phát hành chính thức.
-
-WAHU và Wuthering Waves thuộc về các chủ sở hữu/tác giả tương ứng.
-Nguồn bản Việt: [WahuVN/Viet-Hoa-WuWa](https://github.com/WahuVN/Viet-Hoa-WuWa).
