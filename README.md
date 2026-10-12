@@ -47,5 +47,4 @@ fork/clone trái với GPL. Tên dự án không có nghĩa là một fork đư�
 hỗ trợ hoặc là bản phát hành chính thức.
 
 WAHU và Wuthering Waves thuộc về các chủ sở hữu/tác giả tương ứng.
-Giấy phép của ứng dụng không cấp quyền phân phối lại dữ liệu của họ.
 Nguồn bản Việt: [WahuVN/Viet-Hoa-WuWa](https://github.com/WahuVN/Viet-Hoa-WuWa).
