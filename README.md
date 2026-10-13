@@ -1,6 +1,6 @@
 # Ossmoc Echo
 
-Ứng dụng Windows hiển thị bản dịch Việt WAHU cho Wuthering Waves bằng
+Ứng dụng Windows hiển thị bản dịch Việt cho Wuthering Waves bằng
 OCR English và đối chiếu dữ liệu có sẵn. Duy trì bởi **Ossmoc**.
 
 ## Sử dụng
