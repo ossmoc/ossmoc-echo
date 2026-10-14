@@ -5,12 +5,12 @@ OCR English và đối chiếu dữ liệu có sẵn. Duy trì bởi **Ossmoc**.
 
 ## Sử dụng
 
-Tải bản Windows ở **Releases**, giải nén toàn bộ thư mục và mở
-`OssmocEcho.exe`. Không cần cài Python. 
-
-1. Nạp dữ liệu tiếng Anh của game và bản Việt trong **Dữ liệu**.
-2. Mở game bằng ngôn ngữ English.
-3. **Tổng quát → Chọn game → Kết nối → Bắt đầu dịch**.
+1. Vào trang GitHub Releases, tải bản mới nhất dành cho Windows rồi giải nén.
+2. Mở Wuthering Waves và chuyển ngôn ngữ game sang English.
+3. Mở OssmocEcho.exe, vào mục Dữ liệu → chọn Làm mới dữ liệu English.
+4. Chọn thư mục Wuthering Waves Game có chứa thư mục Client. Chỉ cần thực hiện lại bước này sau khi game cập nhật hoặc lần đầu sử dụng app.
+5. Quay về Tổng quát → chọn Đổi cửa sổ game → chọn cửa sổ Wuthering Waves.
+6. Nhấn Bắt đầu dịch, sau đó quay lại game.
 
 Bản công khai không kèm dữ liệu game, ảnh chụp, cấu hình
 người dùng hoặc công cụ FModelCLI. Có thể nhập dữ liệu hợp lệ từ nguồn
