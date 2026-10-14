@@ -6,7 +6,7 @@ OCR English và đối chiếu dữ liệu có sẵn. Duy trì bởi **Ossmoc**.
 ## Sử dụng
 
 Tải bản Windows ở **Releases**, giải nén toàn bộ thư mục và mở
-`OssmocEcho.exe`. Không cần cài Python. Không chỉ chép riêng EXE.
+`OssmocEcho.exe`. Không cần cài Python. 
 
 1. Nạp dữ liệu tiếng Anh của game và bản Việt trong **Dữ liệu**.
 2. Mở game bằng ngôn ngữ English.
