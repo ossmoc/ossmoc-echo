@@ -2,6 +2,9 @@ import subprocess
 import os
 import tempfile
 import sys
+import queue
+import threading
+import time
 from pathlib import Path
 
 class NativeExtractor:
@@ -20,7 +23,7 @@ class NativeExtractor:
             if fallback.exists():
                 self.tool_path = fallback
 
-    def run_extraction(self, game_dir, aes_key, output_dir, filter_keyword):
+    def run_extraction(self, game_dir, aes_key, output_dir, filter_keyword, *, progress=None, timeout=300):
         """
         Calls the C# core for precise extraction
         """
@@ -31,7 +34,7 @@ class NativeExtractor:
         # Ensure output directory exists
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        all_keys = [k.strip() for k in aes_key.split(";") if k.strip()]
+        all_keys = list(dict.fromkeys(k.strip() for k in aes_key.split(";") if k.strip()))
         if not all_keys:
             print("[Native] No AES keys provided.")
             return False
@@ -45,6 +48,7 @@ class NativeExtractor:
         cache_dir.mkdir(parents=True, exist_ok=True)
             
         tmp_path = None
+        process = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", 
@@ -78,12 +82,38 @@ class NativeExtractor:
                 ,creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
 
-            for line in process.stdout:
-                line = line.strip()
+            messages = queue.Queue(maxsize=256)
+            def read_output():
+                try:
+                    while line := process.stdout.readline(65536):
+                        try:
+                            messages.put_nowait(line.strip())
+                        except queue.Full:
+                            pass  # Keep a noisy tool from blocking or filling RAM.
+                except (OSError, ValueError):
+                    pass
+            reader = threading.Thread(target=read_output, daemon=True)
+            reader.start()
+            started = last_report = time.monotonic()
+            while True:
+                try:
+                    line = messages.get(timeout=.25)
+                except queue.Empty:
+                    line = ''
                 if line:
                     print(f"    | {line}")
-
-            process.wait()
+                    if progress:
+                        progress(f'[PAK] {filter_keyword}: {line[:400]}')
+                now = time.monotonic()
+                if process.poll() is not None and not reader.is_alive() and messages.empty():
+                    break
+                if now - started >= timeout:
+                    raise TimeoutError(f'Đọc PAK ({filter_keyword}) quá {timeout:g} giây. '
+                                       'Hãy thoát game và thử lại; giữ nguyên dữ liệu cũ.')
+                if progress and now - last_report >= 5:
+                    progress(f'Đang đọc PAK {filter_keyword} — {int(now-started)} giây '
+                             f'(giới hạn {timeout:g} giây). Không mở game trong lúc quét.')
+                    last_report = now
             
             if process.returncode == 0:
                 print(f"[Native] Extraction success for {filter_keyword}")
@@ -91,10 +121,18 @@ class NativeExtractor:
                 print(f"[Native] Extraction failed with code {process.returncode}")
                 overall_success = False
                 
-        except Exception as e:
+        except OSError as e:
+            if isinstance(e, TimeoutError):
+                raise
             print(f"[Native] Exception during execution: {e}")
             overall_success = False
         finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+                if process.stdout:
+                    process.stdout.close()
             if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)

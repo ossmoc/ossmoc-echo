@@ -1,6 +1,7 @@
 """User-facing setup guidance, shared by startup, data page and errors."""
 
 ENGLISH_DATA_NOTE = (
+    'Thoát hoàn toàn game trước khi chuẩn bị / làm mới dữ liệu; không mở game trong lúc quét.\n'
     'Tác dụng: lấy câu tiếng Anh gốc từ game để tìm đúng câu và ghép bản Việt.\n'
     'Khi dùng: lần đầu chưa có dữ liệu English hoặc sau khi game cập nhật. '
     'Đã có dữ liệu thì không cần làm lại mỗi lần mở app.\n'
@@ -20,6 +21,7 @@ MISSING_ENGLISH_DATA = (
 
 USAGE_GUIDE = (
     'Chuẩn bị lần đầu\n'
+    'Thoát hoàn toàn game trước khi quét và chỉ mở lại sau khi hoàn tất.\n'
     '1. Nếu chưa có dữ liệu: vào Dữ liệu → Chuẩn bị / làm mới dữ liệu English.\n'
     '2. Chọn thư mục Wuthering Waves Game có thư mục Client; không chọn .exe hoặc .pak.\n'
     '3. App tự dùng bộ khóa mới nhất, không cần nhập phiên bản. '

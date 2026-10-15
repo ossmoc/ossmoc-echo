@@ -56,7 +56,7 @@ def translation_update_status(release: ReleaseInfo, installed: Mapping[str, Any]
     if not current and local is None:
         # An offline archive can prove its exact release by the published hash.
         hashes = installed.get("hashes") or {}
-        current = any(a.name == f"App-Dich-WuWa-{release.tag}.zip" and a.sha256 and
+        current = any(a.name in database_archive_names(release.tag) and a.sha256 and
                       hashes.get(a.name) == a.sha256 for a in release.assets)
     if current:
         game = installed.get("translation_game_version") or release.game_version or extract_game_version(release.body)
@@ -70,6 +70,11 @@ class TranslationUpdateError(RuntimeError):
 
 class TranslationUpdateCancelled(TranslationUpdateError):
     pass
+
+
+def database_archive_names(tag: str) -> tuple[str, ...]:
+    # Only exact, known data bundles, never an arbitrary installer/client ZIP.
+    return (f'App-Dich-WuWa-{tag}.zip', f'VietHoa-WuWa-{tag}.zip')
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,13 @@ class ReleaseInfo:
             raise TranslationUpdateError(f"Release thiếu hoặc trùng tệp {name}.")
         return found[0]
 
+    def database_asset(self) -> ReleaseAsset:
+        for name in database_archive_names(self.tag):
+            if any(asset.name == name for asset in self.assets):
+                return self.asset_named(name)
+        raise TranslationUpdateError('Release chưa có gói dữ liệu bản dịch được hỗ trợ: '
+                                     + ' hoặc '.join(database_archive_names(self.tag)))
+
 
 @dataclass(frozen=True)
 class GenerationResult:
@@ -147,7 +159,7 @@ class TranslationUpdater:
             sha = digest[7:].lower() if digest.startswith("sha256:") else ""
             assets.append(ReleaseAsset(str(item["name"]), str(item["browser_download_url"]), int(item["size"]), sha))
         checksum = next((asset for asset in assets if asset.name == f"VHWuWa-{tag}-SHA256SUMS.txt"), None)
-        relevant = (f"App-Dich-WuWa-{tag}.zip", "WuWaVH_EN_99_P.pak")
+        relevant = (*database_archive_names(tag), "WuWaVH_EN_99_P.pak")
         if checksum and any(asset.name in relevant and not _SHA_RE.fullmatch(asset.sha256) for asset in assets):
             self._validate_asset_url(checksum, tag)
             data = self._read_url(checksum.url, limit=128 * 1024)
@@ -164,7 +176,7 @@ class TranslationUpdater:
         game = extract_game_version(title + "\n" + body)
         result = ReleaseInfo(tag, title, body, str(raw.get("published_at") or ""), game, tuple(assets))
         # Never advertise an installable release without the exact data asset/hash.
-        self._validate_asset(result.asset_named(f"App-Dich-WuWa-{tag}.zip"), tag)
+        self._validate_asset(result.database_asset(), tag)
         return result
 
     def active_manifest(self) -> dict[str, Any]:
@@ -187,7 +199,7 @@ class TranslationUpdater:
     ) -> GenerationResult:
         with self._lock:
             self._check_cancel(cancel)
-            archive_asset = release.asset_named(f"App-Dich-WuWa-{release.tag}.zip")
+            archive_asset = release.database_asset()
             self._validate_asset(archive_asset, release.tag)
             official_cache = Path(official_cache).resolve()
             if not official_cache.is_file():

@@ -365,10 +365,14 @@ class DesktopController(QObject):
         except Exception:
             manifest = {}
         detected = manifest.get('detected_game_version')
-        game_data = (f'{detected} (tự nhận diện)' if detected and self.has_english_data
+        game_data = (f'{detected} (ghi nhận lúc chuẩn bị dữ liệu)' if detected and self.has_english_data
                      else self.raw.get('official_source_version') or
                      ('đã chuẩn bị (tự động)' if self.has_english_data else 'chưa chuẩn bị'))
-        return (f"Bản dịch đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
+        from ludiglot.core.game_pak_update import read_launcher_game_version
+        game_root = self.raw.get('game_install_root') or manifest.get('game_install_root')
+        installed = read_launcher_game_version(Path(game_root)) if game_root else None
+        return (f"Game đang cài (launcher): {installed or 'chưa xác định'}\n"
+                f"Bản dịch đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
                 f"WuWa được bản dịch hỗ trợ: {manifest.get('translation_game_version') or 'chưa xác định'}\n"
                 f"Dữ liệu game: {game_data}")
 
@@ -1468,7 +1472,7 @@ class DesktopController(QObject):
             self._set_status(self.update_summary)
             self.data_changed.emit()
             return
-        size = sum(a.size for a in self.latest_release.assets if a.name.startswith("App-Dich") or a.name == "WuWaVH_EN_99_P.pak")
+        size = self.latest_release.database_asset().size + sum(a.size for a in self.latest_release.assets if a.name == "WuWaVH_EN_99_P.pak")
         if QMessageBox.question(None, "Cập nhật bản dịch", f"Tải {self.latest_release.tag} (tối đa {size / 1024**2:.0f} MiB)?\nChỉ lưu trong dữ liệu app, không cài vào game.") != QMessageBox.StandardButton.Yes:
             return
         self._start_job("install", lambda: self._updater().install_release(self.latest_release, self.config.db_path, progress=self._status.emit, cancel=self._job_cancel))
@@ -1522,7 +1526,7 @@ class DesktopController(QObject):
             elif 'translation_error' in result:
                 self.latest_release = None
                 self.update_available = False
-                self.update_summary = 'Không kiểm tra được cập nhật bản dịch.'
+                self.update_summary = 'Không kiểm tra được cập nhật bản dịch: ' + result['translation_error']
                 self.log_message.emit(result['translation_error'])
             if 'app' in result:
                 self.latest_app_release = result['app']

@@ -78,7 +78,23 @@ def read_launcher_game_version(game: Path) -> str | None:
         if len(text) > 65536:
             return None
         data = json.loads(text)
-        version = data.get('version') if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        # The top-level launcher version can remain stale after an SD/UHD
+        # bundle update. Prefer a single completed common-resource version.
+        bundles = data.get('bundles')
+        installed = set()
+        if isinstance(bundles, dict):
+            for bundle in bundles.values():
+                if (isinstance(bundle, dict) and not bundle.get('state')
+                        and isinstance(bundle.get('resourcePacks'), list)
+                        and 'common' in bundle['resourcePacks']):
+                    value = bundle.get('version')
+                    if isinstance(value, str) and re.fullmatch(r'\d+\.\d+(?:\.\d+){0,2}', value.strip()):
+                        installed.add(value.strip())
+            if len(installed) > 1:
+                return None  # Mixed bundles: do not guess the highest version.
+        version = next(iter(installed)) if installed else data.get('version')
         if isinstance(version, str) and re.fullmatch(r'\d+\.\d+(?:\.\d+){0,2}', version.strip()):
             return version.strip()
     except (OSError, UnicodeError, ValueError):
@@ -200,17 +216,11 @@ def _match_paks(pak_dir: Path, pak_name: str) -> list[Path]:
 def build_game_pak_update_plan(data_root: Path, options: GamePakOptions) -> GamePakUpdatePlan:
     staged_root = data_root / "Client" / "Content" / "Aki"
     extraction_steps = [
-        ExtractionStep("Config/Json", "[PAK] 正在提取通用配置 (Config/Json) ..."),
-        ExtractionStep("ConfigDB/", "[PAK] 正在提取通用配置数据库 (ConfigDB 根目录) ..."),
+        ExtractionStep("Config/Json", "Đang đọc cấu hình game (Config/Json)…"),
+        ExtractionStep("ConfigDB/", "Đang đọc dữ liệu văn bản (ConfigDB, gồm tất cả ngôn ngữ)…"),
     ]
-    for lang in options.languages:
-        extraction_steps.append(
-            ExtractionStep(
-                f"ConfigDB/{lang}",
-                f"[PAK] 正在提取 ConfigDB/{lang} ...",
-                f"[PAK] ⚠️  ConfigDB/{lang} 提取报告失败 (可能是 FModelCLI 返回码非0，但不影响整体流程)",
-            )
-        )
+    # FModelCLI uses substring matching: ConfigDB/ already includes en and
+    # zh-Hans. Re-running it per language remounts every PAK unnecessarily.
     for lang in options.languages:
         extraction_steps.append(
             ExtractionStep(f"TextMap/{lang}", f"[PAK] 正在提取 TextMap/{lang} ...")
@@ -372,7 +382,11 @@ def update_from_game_paks(cfg, config_path: Path, output_db_path: Path, progress
 
     for step in plan.extraction_steps:
         _log(progress, step.message)
-        success = native_extractor.run_extraction(pak_root, keys_str, plan.data_root, step.filter)
+        success = native_extractor.run_extraction(pak_root, keys_str, plan.data_root, step.filter,
+                                                  progress=progress)
+        if not success:
+            raise GamePakUpdateError(f'Không đọc được dữ liệu PAK ({step.filter}). '
+                                     'Hãy thoát game và thử lại; dữ liệu cũ được giữ nguyên.')
         if not success and step.warn_on_failure:
             _log(progress, step.warn_on_failure)
 

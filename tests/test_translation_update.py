@@ -122,6 +122,28 @@ def test_check_latest_exact_asset_and_source_version(tmp_path):
     assert not updater.root.exists()  # Checking doesn't install/create local generations.
 
 
+def test_renamed_3017_bundle_checks_and_installs_with_hash_validation(tmp_path):
+    raw_db = database(tmp_path/'source.db')
+    payload = archive(raw_db, ('editor/project.db',))
+    item = asset(f'VietHoa-WuWa-{TAG}.zip', payload)
+    raw = {'tag_name': TAG, 'assets': [{'name': item.name,
+        'browser_download_url': item.url, 'size': item.size, 'digest': 'sha256:'+item.sha256}]}
+    updater = TranslationUpdater(tmp_path/'updates', opener=opener({
+        RELEASE_API:json.dumps(raw).encode(), item.url:payload}))
+    release = updater.check_latest()
+    assert release.database_asset() == item
+    result = updater.install_release(release, cache(tmp_path/'english.json'))
+    assert result.manifest['hashes'][item.name] == item.sha256
+    assert result.database_path.is_file()
+    assert not list(updater.root.rglob('*.exe'))
+
+
+def test_unrecognized_zip_is_not_selected_as_translation_data():
+    release = ReleaseInfo(TAG, assets=(ReleaseAsset('random-client.zip', DOWNLOAD+'random-client.zip', 100, 'a'*64),))
+    with pytest.raises(TranslationUpdateError, match='gói dữ liệu'):
+        release.database_asset()
+
+
 def test_check_latest_uses_published_checksums_if_api_digest_missing(tmp_path):
     release, _ = release_fixture(tmp_path)
     a = release.assets[0]

@@ -288,12 +288,12 @@ try {
         $movedNew += $entry.Name
     }
     @{success=$true;version=$plan.tag;backup=$backup} | ConvertTo-Json | Set-Content -LiteralPath $plan.result -Encoding UTF8
-    if (-not $NoRestart) { Start-Process -FilePath (Join-Path $application 'OssmocEcho.exe') -WorkingDirectory $application -WindowStyle Hidden }
+    if (-not $NoRestart) { Start-Process -FilePath (Join-Path $application 'OssmocEcho.exe') -WorkingDirectory $application -WindowStyle Normal }
 } catch {
     $failure = $_.Exception.Message
     foreach ($name in $movedNew) { Move-Item -LiteralPath (Join-Path $application $name) -Destination (Join-Path $stage $name) }
     foreach ($name in $movedOld) { Move-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $application $name) }
     @{success=$false;error=$failure;backup=$backup} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'result.json') -Encoding UTF8
-    if (-not $NoRestart -and (Test-Path -LiteralPath (Join-Path $application 'OssmocEcho.exe'))) { Start-Process -FilePath (Join-Path $application 'OssmocEcho.exe') -WorkingDirectory $application -WindowStyle Hidden }
+    if (-not $NoRestart -and (Test-Path -LiteralPath (Join-Path $application 'OssmocEcho.exe'))) { Start-Process -FilePath (Join-Path $application 'OssmocEcho.exe') -WorkingDirectory $application -WindowStyle Normal }
 }
 '''

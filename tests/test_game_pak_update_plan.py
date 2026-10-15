@@ -54,8 +54,6 @@ def test_game_pak_update_plan_includes_text_filters_and_moves(tmp_path: Path) ->
     assert [step.filter for step in plan.extraction_steps] == [
         "Config/Json",
         "ConfigDB/",
-        "ConfigDB/en",
-        "ConfigDB/zh-Hans",
         "TextMap/en",
         "TextMap/zh-Hans",
         "UI/Framework/LGUI/Font/",
@@ -102,7 +100,7 @@ def test_game_pak_update_plan_includes_audio_filters_and_config_roots(tmp_path: 
     ]
 
 
-def test_configdb_language_steps_warn_on_failure(tmp_path: Path) -> None:
+def test_configdb_languages_are_not_extracted_twice(tmp_path: Path) -> None:
     options = GamePakOptions(
         version="2.0",
         platform="Windows",
@@ -113,9 +111,10 @@ def test_configdb_language_steps_warn_on_failure(tmp_path: Path) -> None:
     )
 
     plan = build_game_pak_update_plan(tmp_path / "data", options)
-    configdb_lang = next(step for step in plan.extraction_steps if step.filter == "ConfigDB/en")
-
-    assert configdb_lang.warn_on_failure is not None
+    filters = [step.filter for step in plan.extraction_steps]
+    assert filters.count('ConfigDB/') == 1
+    assert 'ConfigDB/en' not in filters
+    assert 'TextMap/en' in filters
 
 
 def test_folder_only_options_select_rolling_json_feed(monkeypatch):
@@ -161,11 +160,15 @@ def test_game_root_rejects_incomplete_install(tmp_path):
 
 @pytest.mark.parametrize('content,expected', [
     ('{"version":"3.7.0"}', '3.7.0'),
+    ('{"version":"3.6.0","bundles":{"SD":{"version":"3.7.0","state":"","resourcePacks":["common","sd"]}}}', '3.7.0'),
+    ('{"version":"3.6.0","bundles":{"UHD":{"version":"3.7.0","state":"","resourcePacks":["common","uhd"]}}}', '3.7.0'),
+    ('{"version":"3.6.0","bundles":{"SD":{"version":"3.7.0","state":"downloading","resourcePacks":["common","sd"]}}}', '3.6.0'),
+    ('{"version":"3.6.0","bundles":{"SD":{"version":"3.7.0","resourcePacks":["common"]},"UHD":{"version":"3.8.0","resourcePacks":["common"]}}}', None),
     ('\ufeff{"version":"3.8"}', '3.8'),
     ('{"version":"Latest"}', None),
     ('{"version":3.7}', None),
     ('[]', None), ('bad JSON', None), (' '*65537, None)],
-    ids=['version','bom','rolling','numeric','array','invalid','too-large'])
+    ids=['version','sd-bundle','uhd-bundle','unfinished','mixed','bom','rolling','numeric','array','invalid','too-large'])
 def test_optional_launcher_version_is_strict_and_bounded(tmp_path, content, expected):
     from ludiglot.core.game_pak_update import read_launcher_game_version
     path = tmp_path/'launcherDownloadConfig.json'
