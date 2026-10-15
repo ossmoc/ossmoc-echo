@@ -144,6 +144,37 @@ def test_unrecognized_zip_is_not_selected_as_translation_data():
         release.database_asset()
 
 
+@pytest.mark.parametrize('english,success',[('Hello Jinhsi',True),('Changed source sentence',False)])
+def test_empty_seed_recovers_from_same_release_sources_and_en_pak(tmp_path,monkeypatch,english,success):
+    source = tmp_path/'seed.db'
+    database(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute('DELETE FROM entries')
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream,'w') as package:
+        package.writestr('editor/project.db',source.read_bytes())
+        package.writestr('editor/build_support/TextSource/36_source/3.6_part01.txt',
+                         '@@ lang_text.db||Text||DIALOG_1\nEN: Hello Jinhsi\n')
+    payload = stream.getvalue()
+    bundle = asset(f'VietHoa-WuWa-{TAG}.zip',payload)
+    pak = asset('WuWaVH_EN_99_P.pak',b'verified compiled EN pak')
+    release = ReleaseInfo(TAG,game_version='3.7',assets=(bundle,pak))
+    updater = TranslationUpdater(tmp_path/'updates',opener=opener({bundle.url:payload,pak.url:b'verified compiled EN pak'}))
+    monkeypatch.setattr(updater,'_extract_canonical',lambda *_a:{('lang_text.db','DIALOG_1'):'Xin chào Jinhsi'})
+    official = cache(tmp_path/'official.json',english=english)
+    before = official.read_bytes()
+    if success:
+        result = updater.install_release(release,official)
+        assert result.manifest['database_name_mode']=='packaged_seed'
+        row = json.loads(result.cache_path.read_text(encoding='utf-8'))['hello']['matches'][0]
+        assert row['official_vi']=='Xin chào Jinhsi'
+    else:
+        with pytest.raises(TranslationUpdateError,match='giữ nguyên'):
+            updater.install_release(release,official)
+        assert updater.active_manifest()=={}
+    assert official.read_bytes()==before
+
+
 def test_check_latest_uses_published_checksums_if_api_digest_missing(tmp_path):
     release, _ = release_fixture(tmp_path)
     a = release.assets[0]

@@ -72,6 +72,10 @@ class TranslationUpdateCancelled(TranslationUpdateError):
     pass
 
 
+class EmptyTranslationDatabase(TranslationUpdateError):
+    """A valid SQLite seed whose entry table is empty, not corrupt data."""
+
+
 def database_archive_names(tag: str) -> tuple[str, ...]:
     # Only exact, known data bundles, never an arbitrary installer/client ZIP.
     return (f'App-Dich-WuWa-{tag}.zip', f'VietHoa-WuWa-{tag}.zip')
@@ -211,7 +215,11 @@ class TranslationUpdater:
             self._download(archive_asset, release.tag, archive, progress, cancel)
             database = generation / "project.db"
             self._extract_database(archive, database, cancel)
-            mode = self._validate_database(database, cancel)
+            try:
+                mode = self._validate_database(database, cancel)
+            except EmptyTranslationDatabase:
+                mode = 'packaged_seed'
+                self._emit(progress, 'Database trong gói là bản khởi tạo rỗng; đang đọc nguồn English và PAK EN cùng release…')
             canonical = None
             hashes = {archive_asset.name: archive_asset.sha256.lower()}
             if mode != "en":
@@ -227,7 +235,15 @@ class TranslationUpdater:
                 canonical = self._extract_canonical(pak_root, generation / "canonical", progress, cancel)
                 # Persist an app-owned EN provider, so later game rescans cannot
                 # accidentally reapply the Community DB's Hán-Việt target.
-                database = self._derive_en_database(database, generation / "project-en.db", canonical, cancel)
+                if mode == 'packaged_seed':
+                    from ludiglot.core.release_sources import rebuild_from_release_sources
+                    try:
+                        database = rebuild_from_release_sources(archive, generation / 'project-en.db', canonical,
+                                                                 lambda: self._check_cancel(cancel))
+                    except (ValueError, UnicodeError, zipfile.BadZipFile) as exc:
+                        raise TranslationUpdateError(f'Không đọc được nguồn trong gói bản dịch: {exc}') from exc
+                else:
+                    database = self._derive_en_database(database, generation / "project-en.db", canonical, cancel)
                 self._validate_database(database, cancel)
             metadata = {
                 "release_tag": release.tag, "release": release.to_dict(), "variant": "en",
@@ -481,7 +497,7 @@ class TranslationUpdater:
                 if not {"dbfile", "key", "vi", "status"} <= columns:
                     raise TranslationUpdateError("Database WAHU thiếu các cột ID/bản Việt/trạng thái bắt buộc.")
                 if not conn.execute("SELECT 1 FROM entries LIMIT 1").fetchone():
-                    raise TranslationUpdateError("Database WAHU không có dữ liệu.")
+                    raise EmptyTranslationDatabase("Database trong gói bản dịch không có dữ liệu.")
                 mode_row = conn.execute("SELECT v FROM meta WHERE k='name_mode'").fetchone()
                 mode = str(mode_row[0]).strip().casefold() if mode_row else ""
                 if mode not in {"en", "hv", "hanviet"}:

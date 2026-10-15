@@ -364,17 +364,14 @@ class DesktopController(QObject):
             manifest = self._updater().active_manifest() or {}
         except Exception:
             manifest = {}
-        detected = manifest.get('detected_game_version')
-        game_data = (f'{detected} (ghi nhận lúc chuẩn bị dữ liệu)' if detected and self.has_english_data
-                     else self.raw.get('official_source_version') or
-                     ('đã chuẩn bị (tự động)' if self.has_english_data else 'chưa chuẩn bị'))
+        game_data = ('đã chuẩn bị; làm mới sau khi game cập nhật' if self.has_english_data else 'chưa chuẩn bị')
         from ludiglot.core.game_pak_update import read_launcher_game_version
         game_root = self.raw.get('game_install_root') or manifest.get('game_install_root')
         installed = read_launcher_game_version(Path(game_root)) if game_root else None
         return (f"Game đang cài (launcher): {installed or 'chưa xác định'}\n"
                 f"Bản dịch đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
                 f"WuWa được bản dịch hỗ trợ: {manifest.get('translation_game_version') or 'chưa xác định'}\n"
-                f"Dữ liệu game: {game_data}")
+                f"Dữ liệu English: {game_data}")
 
     @property
     def auto_mode(self):

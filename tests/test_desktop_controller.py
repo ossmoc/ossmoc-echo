@@ -566,12 +566,12 @@ def test_joint_check_keeps_app_result_when_translation_network_fails(controller,
     from types import SimpleNamespace
     from ludiglot.core.app_update import AppRelease
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.1.2', '', 10, '')
+    app_release = AppRelease('v1.1.3', '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.1.2' in controller.app_update_summary
+    assert controller.app_update_available and 'v1.1.3' in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 
@@ -1019,6 +1019,18 @@ def test_successful_rescan_commits_folder_without_inventing_version(controller, 
     assert saved['game_install_root'] == str(game)
     assert saved['game_version'] is None and saved['official_source_version'] is None
     assert result.cache_path.is_file()
+
+
+def test_current_launcher_and_english_state_do_not_report_old_scan_as_game_version(controller,tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    game = make_game_folder(tmp_path)
+    (game/'launcherDownloadConfig.json').write_text('{"version":"3.6.0","bundles":{"SD":{"version":"3.7.0","state":"","resourcePacks":["common","sd"]}}}',encoding='utf-8')
+    controller.raw['game_install_root']=str(game)
+    monkeypatch.setattr(controller,'_updater',lambda:SimpleNamespace(active_manifest=lambda:{'detected_game_version':'3.6.0'}))
+    summary = controller.translation_version_summary
+    assert 'Game đang cài (launcher): 3.7.0' in summary
+    assert 'Dữ liệu English:' in summary
+    assert '3.6.0' not in summary
 
 
 def test_rescan_rejects_non_english_output_before_activating(controller, tmp_path, monkeypatch):
