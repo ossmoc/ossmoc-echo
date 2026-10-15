@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QApplication
 from ludiglot.ui.hotkey_registrar import HotkeyBinding
 
 WM_HOTKEY = 0x0312
-HOTKEY_IDS = {"capture": 1, "toggle": 2, "exception": 3, "exception_select": 4}
+HOTKEY_IDS = {"capture": 1, "toggle": 2, "exception": 3, "exception_select": 4, "screenshot": 5}
 
 
 @dataclass(frozen=True)

@@ -130,7 +130,7 @@ class WahuTranslationProvider:
             origin, destination = (old_file.casefold(), key), (target_file.casefold(), key)
             if destination in translations or str(target_vi or '').strip():
                 continue
-            if origin not in translations or not re.fullmatch(r'(?:Main|Side)_.+_\d+_\d+', key):
+            if origin not in translations or not re.fullmatch(r'(?:Main|Side|GNNPC)_.+_\d+_\d+', key):
                 continue
             if not conv or conv != target_conv or not version or version != target_version:
                 continue
@@ -144,7 +144,8 @@ class WahuTranslationProvider:
             if '*' in old_en or '*' in old_cn:
                 continue
             if (_source_text(old_cn) != _source_text(target_cn or '')
-                    or not _equivalent_english(old_en, target_en or '', aliases)):
+                    or not (_equivalent_english(old_en, target_en or '', aliases)
+                            or _reviewed_source_rephrasing(key, old_cn, old_en, target_en or ''))):
                 continue
             # Canonical English-name targets, when required, still come from
             # the reviewed source identity, never an unreviewed destination.
@@ -277,6 +278,13 @@ def _equivalent_english(old: str, current: str, aliases: Mapping[str, str]) -> b
     """
     def canonical(text):
         text = _source_text(text).replace('’', "'")
+        # Only unambiguous expansions; 's / 'd in general could mean is/has or
+        # had/would and must not be guessed. Preserve negation and all nouns.
+        for contraction, expanded in (("I'm", 'I am'), ("won't", 'will not'),
+                ("can't", 'cannot'), ("Whoever's playing", 'Whoever is playing')):
+            text = re.sub(r'\b'+re.escape(contraction)+r'\b', expanded, text)
+        text = re.sub(r"\b(I|you|we|they|he|she|it)'ll\b", r'\1 will', text, flags=re.I)
+        text = re.sub(r"\b(you|we|they)'re\b", r'\1 are', text, flags=re.I)
         text = re.sub(r"\b(I|you|we|they|he|she|it) would've\b", r'\1 would have', text, flags=re.I)
         text = re.sub(r'\bGot it in my head\b', 'Got it into my head', text)
         if aliases and not text.isascii():
@@ -284,6 +292,18 @@ def _equivalent_english(old: str, current: str, aliases: Mapping[str, str]) -> b
             text = re.sub(pattern, lambda m: aliases[m.group()], text)
         return text
     return canonical(old) == canonical(current)
+
+
+def _reviewed_source_rephrasing(key: str, chinese: str, old: str, current: str) -> bool:
+    """A reviewed pair, not a fuzzy exception for arbitrary source changes.
+
+    The recorded Chinese explicitly mentions reinforcements. All other sync,
+    reviewed-target, version and unique-destination checks still apply before
+    this identity-specific English localization revision can be admitted.
+    """
+    return (key, _source_text(chinese), _source_text(old), _source_text(current)) == (
+        'Main_Mengzhou_3_6_170_8', '又有夜归军的支援了啊。',
+        'So the Midnight Rangers came.', 'So the Midnight Rangers showed up with backup.')
 
 
 def apply_configured_wahu_provider(

@@ -91,6 +91,8 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
     result["fallback_positive_control"], result["fallback_capture_excluded"] = probe(fallback)
     fallback.hide()
     result["window_capture"] = check_window_capture()
+    from ludiglot.ui.window_capture_smoke import check_translated_screenshot
+    result['translated_screenshot'] = check_translated_screenshot(controller,report_path)
     if len(image_paths) >= 3:
         from ludiglot.ui.window_capture_smoke import check_captured_dialogue
         result["captured_dialogue"] = check_captured_dialogue(controller, image_paths[2])
@@ -153,6 +155,7 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
     result['success'] = result['success'] and result['answer_fixed_font_without_top_box']
     result['success'] = result['success'] and result['same_sentence_presentation_stable']
     result['success'] = result['success'] and result['native_matching_backend']
+    result['success'] = result['success'] and result['translated_screenshot']['success']
     if 'cpu_fallback' in result:
         result['success'] = result['success'] and all(result['cpu_fallback'][k] for k in ('ready','verified_dialogue'))
     return result

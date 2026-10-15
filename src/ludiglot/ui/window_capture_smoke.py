@@ -129,3 +129,104 @@ if __name__ == "__main__":
     import json
     app = QApplication([])
     print(json.dumps(check_window_capture(), ensure_ascii=False))
+
+
+def check_translated_screenshot(controller,report_path):
+    """Real HWND -> compositor -> Windows image clipboard -> PNG round trip."""
+    import ctypes
+    import win32gui
+    from PyQt6.QtCore import QMimeData
+    from PyQt6.QtGui import QImage,QPixmap
+    from PIL import Image,ImageDraw,ImageFont
+    from ludiglot.core.auto_wuwa import AutoTextBlock
+    from ludiglot.core.desktop_models import AUTO_DEFAULTS
+    app=QApplication.instance()
+    clipboard=app.clipboard()
+    previous=QMimeData()
+    old_mime=clipboard.mimeData()
+    if old_mime:
+        if old_mime.hasImage():previous.setImageData(old_mime.imageData())
+        for fmt in old_mime.formats():previous.setData(fmt,old_mime.data(fmt))
+    target=QLabel(); target.setWindowTitle('Ossmoc screenshot synthetic QA')
+    target.setWindowFlags(Qt.WindowType.FramelessWindowHint|Qt.WindowType.Tool)
+    target.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    game=Image.new('RGB',(1920,1080),'#1b365d')
+    ImageDraw.Draw(game).text((550,900),'Game English subtitle.',font=ImageFont.truetype('C:/Windows/Fonts/segoeui.ttf',28),fill='white')
+    data=game.tobytes()
+    pixmap=QPixmap.fromImage(QImage(data,game.width,game.height,game.width*3,QImage.Format.Format_RGB888))
+    screen=app.primaryScreen(); dpi=screen.devicePixelRatio()
+    pixmap.setDevicePixelRatio(dpi); target.setPixmap(pixmap)
+    target.setGeometry(screen.geometry().x(),screen.geometry().y(),round(1920/dpi),round(1080/dpi))
+    capture=WindowCapture()
+    old_service=controller.capture_adapter.window_capture
+    old_window=controller.raw['window_capture']
+    old_bounds=controller._last_capture_bounds
+    old_hidden=controller.overlay.user_hidden
+    timer_active=controller.environment_timer.isActive()
+    controller.environment_timer.stop()
+    try:
+        target.show(); app.processEvents()
+        selected=window_target(int(target.winId())); capture.bind(selected)
+        base=capture.image(3); bounds=base.info['capture_bounds']
+        controller.capture_adapter.window_capture=capture
+        controller.raw['window_capture']={'mode':'window','target':selected.identity(),'anchor':bounds}
+        controller._last_capture_bounds=bounds; controller.overlay.user_hidden=False
+        block=AutoTextBlock('dialogue',(500,891,920,55),'Game English subtitle.',
+            'Kiểm tra ảnh chụp kèm bản dịch Việt.',('qa','Main_1'))
+        controller.auto_overlay.set_frame(bounds,(block,),AUTO_DEFAULTS)
+        controller.auto_overlay.show(); app.processEvents()
+        focus=win32gui.GetForegroundWindow()
+        before=(controller.session.generation,controller.session.running)
+        affinity=ctypes.c_uint()
+        ctypes.windll.user32.GetWindowDisplayAffinity(int(controller.auto_overlay.winId()),ctypes.byref(affinity))
+        old_affinity=affinity.value
+        image=controller.capture_translated_screenshot()
+        if image is None:raise RuntimeError(controller.status)
+        files=sorted((controller.paths.data_root/'screenshots').glob('*.png'),key=lambda p:p.stat().st_mtime_ns)
+        saved=QImage(str(files[-1])); copied=clipboard.image()
+        mask=controller.auto_overlay._mask_rect(block)
+        x=round(mask.center().x()*bounds['width']/controller.auto_overlay.width())
+        y=round((mask.top()+5)*bounds['height']/controller.auto_overlay.height())
+        def same_pixels(a,b):
+            a=a.convertToFormat(QImage.Format.Format_RGBA8888)
+            b=b.convertToFormat(QImage.Format.Format_RGBA8888)
+            return a.size()==b.size() and a.constBits().asstring(a.sizeInBytes())==b.constBits().asstring(b.sizeInBytes())
+        result={'image_clipboard':clipboard.mimeData().hasImage(),
+            'physical_size':image.width()==bounds['width'] and image.height()==bounds['height'],
+            'clipboard_matches_png':same_pixels(copied,saved) and same_pixels(copied,image),
+            'includes_translation':image.pixelColor(x,y).getRgb()[:3]!=base.getpixel((x,y)),
+            'background_unchanged':image.pixelColor(10,10).getRgb()[:3]==base.getpixel((10,10)),
+            'no_focus_change':focus==win32gui.GetForegroundWindow(),
+            'session_unchanged':before==(controller.session.generation,controller.session.running),
+            'ocr_input_still_clean':capture.image(1).tobytes()==base.tobytes()}
+        ctypes.windll.user32.GetWindowDisplayAffinity(int(controller.auto_overlay.winId()),ctypes.byref(affinity))
+        result['exclusion_unchanged']=affinity.value==old_affinity
+        controller.auto_overlay.hide()
+        hidden=controller.capture_translated_screenshot()
+        result['button_works_with_background_hidden_overlay']=hidden is not None and hidden==image and not controller.auto_overlay.isVisible()
+        from ludiglot.core.auto_wuwa import AutoDocument
+        reader=controller.auto_reader
+        reader.set_document(AutoDocument(('qa','document'),'Tài liệu Việt','Một đoạn tài liệu để kiểm tra ảnh chụp.'),bounds,
+            {**AUTO_DEFAULTS,'reader_geometry':{'x':target.x()+30,'y':target.y()+100,'width':400,'height':240}})
+        app.processEvents()
+        with_reader=controller.capture_translated_screenshot()
+        reader.hide()
+        hidden_reader=controller.capture_translated_screenshot()
+        result['reader_included_without_stealing_focus']=with_reader is not None and not same_pixels(with_reader,image) and focus==win32gui.GetForegroundWindow()
+        result['background_hidden_reader_included']=hidden_reader is not None and same_pixels(hidden_reader,with_reader) and not reader.isVisible()
+        reader.close()
+        dismissed_reader=controller.capture_translated_screenshot()
+        result['dismissed_reader_excluded']=dismissed_reader is not None and same_pixels(dismissed_reader,image)
+        image.save(str(report_path.with_suffix('.screenshot-native.png')))
+        result['success']=all(result.values())
+        return result
+    finally:
+        clipboard.setMimeData(previous)
+        controller.capture_adapter.window_capture=old_service
+        controller.raw['window_capture']=old_window
+        controller._last_capture_bounds=old_bounds
+        controller.overlay.user_hidden=old_hidden
+        controller.auto_overlay.hide()
+        controller.auto_reader.set_document(None,{}, {})
+        capture.close(); target.close(); target.deleteLater()
+        if timer_active:controller.environment_timer.start()

@@ -130,6 +130,9 @@ class ControlPanel(QMainWindow):
         self.runtime_summary = self._label(); layout.addWidget(self.runtime_summary)
         self.start_button = self._button('Bắt đầu dịch','toggle_realtime',primary=True); self.start_button.setMinimumHeight(48)
         layout.addWidget(self.start_button)
+        self.screenshot_button = self._button('Chụp kèm bản dịch','capture_translated_screenshot')
+        self.screenshot_button.setToolTip('Ảnh tự copy vào clipboard để Ctrl+V; PNG được lưu thêm trong userdata/screenshots cạnh app. Không cần dừng dịch.')
+        layout.addWidget(self.screenshot_button)
         inner,self.options_toggle = self._fold(layout,'Tùy chọn dịch')
         types = QGridLayout()
         for number,(key,label) in enumerate((('dialogue','Hội thoại'),('walking','Thoại khi di chuyển'),('choices','Đáp án'),
@@ -145,8 +148,10 @@ class ControlPanel(QMainWindow):
         self.interval_spin.valueChanged.connect(lambda value:self._invoke('update_runtime_settings',realtime_interval_ms=value) if not self._refreshing else None)
         form.addRow('Khoảng kiểm tra ảnh',self.interval_spin)
         self.capture_hotkey = HotkeyRecorder(controller=self.controller); form.addRow('Bắt đầu / tạm dừng',self.capture_hotkey)
+        self.screenshot_hotkey = HotkeyRecorder(controller=self.controller); form.addRow('Chụp kèm bản dịch',self.screenshot_hotkey)
         inner.addLayout(form)
-        save = QPushButton('Lưu phím tắt'); save.clicked.connect(lambda _:self._invoke('save_hotkeys',{'hotkey_capture':self.capture_hotkey.text()})); inner.addWidget(save)
+        save = QPushButton('Lưu phím tắt'); save.clicked.connect(lambda _:self._invoke('save_hotkeys',{
+            'hotkey_capture':self.capture_hotkey.text(),'hotkey_screenshot':self.screenshot_hotkey.text()})); inner.addWidget(save)
         layout.addStretch(); return page
 
     def _story_page(self):
@@ -260,7 +265,10 @@ class ControlPanel(QMainWindow):
         self.interval_spin.setValue(int(self.controller.raw.get('realtime_interval_ms',350)))
         key = self.controller.raw.get('hotkey_capture',HOTKEY_DEFAULTS['hotkey_capture']) or ''
         if not self.capture_hotkey.hasFocus(): self.capture_hotkey.setText(key)
-        self.hotkey_tip.setText((key+'\n' if key else '')+'Bắt đầu / tạm dừng')
+        shot = self.controller.raw.get('hotkey_screenshot',HOTKEY_DEFAULTS['hotkey_screenshot']) or ''
+        if not self.screenshot_hotkey.hasFocus(): self.screenshot_hotkey.setText(shot)
+        self.hotkey_tip.setText((key+' · ' if key else '')+'Bắt đầu / tạm dừng\n'+
+                               (shot+' · ' if shot else '')+'Chụp kèm bản dịch')
         options = getattr(self.controller,'story_options',())
         selected_side = auto.get('story_group','') if str(auto.get('story_group','')).startswith('Side_') else ''
         signature = (tuple((option.key,option.label,option.count) for option in options),selected_side)
@@ -306,6 +314,9 @@ class ControlPanel(QMainWindow):
         self.start_button.setText(('Tạm dừng dịch' if running else 'Bắt đầu dịch')+(' · '+key if key else ''))
         capture = self.controller.raw.get('window_capture',{})
         self.start_button.setEnabled(bool(self.controller.ready) and capture.get('mode')=='window' and bool(capture.get('target')) and not getattr(self.controller,'_maintenance',False))
+        shot = self.controller.raw.get('hotkey_screenshot',HOTKEY_DEFAULTS['hotkey_screenshot']) or ''
+        self.screenshot_button.setText('Chụp kèm bản dịch'+(' · '+shot if shot else ''))
+        self.screenshot_button.setEnabled(capture.get('mode')=='window' and bool(capture.get('target')))
 
     def refresh_history(self):
         self.history_list.clear()

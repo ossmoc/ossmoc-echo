@@ -32,7 +32,7 @@ class FakeController(QObject):
         self.story_options=(StoryGroup('Main_LahaiRoi_3_1','3.1 · Lahai-Roi','3.1','Main_LahaiRoi_3_1_1_1',10),
                             StoryGroup('Main_Mengzhou_3_6','3.6 · Mengzhou','3.6','Main_Mengzhou_3_6_20_1',12))
     def __getattr__(self,name):
-        if name in {'choose_game_window','toggle_realtime','check_updates','download_update','download_app_update','rescan_game','show_usage_guide','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
+        if name in {'capture_translated_screenshot','choose_game_window','toggle_realtime','check_updates','download_update','download_app_update','rescan_game','show_usage_guide','import_translation','restore_translation','open_logs','save_hotkeys','update_runtime_settings'}:
             return lambda *a,**k:self.calls.append((name,a,k))
         raise AttributeError(name)
     def update_auto_settings(self,**values):
@@ -89,14 +89,24 @@ def test_start_requires_ready_selected_game(panel):
     assert 'Tạm dừng dịch' in panel.start_button.text()
 
 
-def test_one_hotkey_not_special_or_hide_and_runtime_setting_dispatch(panel):
+def test_start_and_screenshot_hotkeys_not_special_or_hide_and_runtime_setting_dispatch(panel):
     panel.capture_hotkey.setText('Ctrl+F8')
     next(button for button in panel.findChildren(QPushButton) if button.text()=='Lưu phím tắt').click()
-    assert panel.controller.calls[-1]==('save_hotkeys',({'hotkey_capture':'Ctrl+F8'},),{})
+    assert panel.controller.calls[-1]==('save_hotkeys',({'hotkey_capture':'Ctrl+F8','hotkey_screenshot':'alt+s'},),{})
     panel.interval_spin.setValue(800)
     assert panel.controller.calls[-1]==('update_runtime_settings',(),{'realtime_interval_ms':800})
     panel.controller.raw['hotkey_capture']='Ctrl+F8'; panel.refresh_data()
     assert 'Ctrl+F8' in panel.start_button.text() and 'Ctrl+F8' in panel.hotkey_tip.text()
+
+
+def test_screenshot_action_has_clipboard_hint_actual_hotkey_and_requires_game(panel):
+    panel.screenshot_button.click()
+    assert panel.controller.calls[-1]==('capture_translated_screenshot',(),{})
+    assert 'clipboard' in panel.screenshot_button.toolTip() and 'Ctrl+V' in panel.screenshot_button.toolTip()
+    panel.controller.raw['hotkey_screenshot']='Ctrl+F9'; panel.refresh_data()
+    assert 'Ctrl+F9' in panel.screenshot_button.text() and 'Ctrl+F9' in panel.hotkey_tip.text()
+    panel.controller.raw['window_capture']={'mode':'desktop'}; panel.refresh_data()
+    assert not panel.screenshot_button.isEnabled()
 
 
 def test_story_selection_has_human_labels_without_raw_ids(panel):
@@ -175,7 +185,7 @@ def test_english_help_visible_without_opening_diagnostics_and_blocks_missing_dat
     assert 'Tác dụng:' in panel.english_data_note.text()
     assert 'Khi dùng:' in panel.english_data_note.text()
     assert 'không chọn file .exe hay .pak' in panel.english_data_note.text()
-    assert 'không phải phiên bản Ossmoc Echo' in panel.english_data_note.text()
+    assert 'Không cần nhập phiên bản' in panel.english_data_note.text()
     assert not panel.data_tools_toggle.isChecked()
     panel.controller.has_english_data=False
     panel.controller.update_available=True; panel.refresh_data()

@@ -338,7 +338,7 @@ class DocumentReader(QDialog):
         # Probe coordinates are client-relative: GetWindowRect would sample the
         # title bar instead of the painted marker and falsely report exclusion.
         import sys
-        if sys.platform == "win32" and self.isVisible():
+        if sys.platform == "win32" and (self.isVisible() or self.document_id):
             import win32gui
             handle = int(self.winId())
             left, top = win32gui.ClientToScreen(handle, (0,0))

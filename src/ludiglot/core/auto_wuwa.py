@@ -141,7 +141,7 @@ class AutoTextIndex:
                 self.choice_controls.setdefault(control, []).append(record)
             if re.search(r"(?:_Name|_Title|_Btn|ButtonText|QuestName|Description)$", key, re.I):
                 continue
-            if re.match(r"(?:Side_|Main_|Huanglong|Rinascita|Chapter|Activity_|Entity_|PrefabTextItem_|Quest_.*InteractContent|.*(?:Plot|Dialogue|Narration))", key, re.I):
+            if re.match(r"(?:Side_|Main_|GNNPC_|Huanglong|Rinascita|Chapter|Activity_|Entity_|PrefabTextItem_|Quest_.*InteractContent|.*(?:Plot|Dialogue|Narration))", key, re.I):
                 norm = normalized(record.english)
                 if norm:
                     self.exact.setdefault(norm, []).append(record)
@@ -267,12 +267,16 @@ class AutoTextIndex:
                     vietnamese=record.vietnamese.replace("{PlayerName}", found['player'].strip())))
         return self._unique(matches) or self._unique(self._scoped(matches))
 
-    def resolve(self, source: str, kind: str) -> VerifiedText | None:
+    def resolve(self, source: str, kind: str, *, remember: bool = True) -> VerifiedText | None:
         query = normalized(source)
-        token = (query, kind, source if self._templates else "", self._scope_signature)
+        short_dialogue = kind == 'dialogue' and (len(query) < 24 or len(query.split()) < 4)
+        # Scene scope does not change for adjacent lines, but the forward
+        # window does. Never reuse a short-answer decision from an old anchor.
+        token = (query, kind, source if self._templates else "", self._scope_signature,
+                 self.context_hint if short_dialogue else None)
         if token in self._memo:
             found = self._memo[token]
-            if found and kind in {'dialogue','choices'}:
+            if remember and found and kind in {'dialogue','choices'}:
                 self.set_context(found.identity[1])
             return found
         # An exact sentence elsewhere always wins over a stale scene hint.
@@ -289,7 +293,7 @@ class AutoTextIndex:
                 found = excerpt
             else:
                 found = self._resolve(query, kind) or excerpt
-        if found and kind in {"dialogue", "choices"}:
+        if remember and found and kind in {"dialogue", "choices"}:
             self.set_context(found.identity[1])
         if len(self._memo) > 1000:
             self._memo.clear()
@@ -301,14 +305,15 @@ class AutoTextIndex:
             return None
         short = len(query) < 24 or len(query.split()) < 4
         if short and kind != "choices" and (kind != 'dialogue' or len(query)<12 or len(query.split())<3):
-            return None
+            return self._resolve_short_dialogue(query) if kind == 'dialogue' else None
         matches = self.exact.get(query, [])
         if kind == "choices" and query in self.choice_controls:
             # These are generic interaction-label source identities, not NPC
             # story lines saying the same short word with another translation.
             matches = self.choice_controls[query]
         if matches:
-            return self._unique(matches) or (self._unique(self._scoped(matches)) if not short else None)
+            return self._unique(matches) or (self._resolve_short_dialogue(query) if short and kind == 'dialogue'
+                                           else self._unique(self._scoped(matches)) if not short else None)
         if exact_only:
             return None
         if not matches and not short:
@@ -336,6 +341,38 @@ class AutoTextIndex:
         if len(targets) != 1:
             return None
         return matches[0] if matches else None
+
+    def _resolve_short_dialogue(self, query: str) -> VerifiedText | None:
+        """Use visible exact text in a narrow forward window of real records.
+
+        Numbering supplies candidate context, not a flow graph. Branches with
+        the same short English remain ambiguous. No fuzzy spelling recovery or
+        invented next ID is allowed, and an unrelated story selection alone
+        cannot authorize a two-word line.
+        """
+        if len(query) < 2 or not self.context_hint:
+            return None
+        hint = dialogue_scene(self.context_hint)
+        anchors = self._by_id.get(self.context_hint, [])
+        if not hint or len(anchors) != 1:
+            return None
+        anchor = anchors[0]
+        nearby = []
+        for number in (hint[1], hint[1] + 1):
+            for norm in self._scene_keys.get((anchor.identity[0], hint[0], number), ()):
+                for record in self.exact[norm]:
+                    scene = dialogue_scene(record.identity[1])
+                    if not scene or record.identity[0] != anchor.identity[0] or scene[0] != hint[0]:
+                        continue
+                    if scene[1] == hint[1] and hint[2] <= scene[2] <= hint[2] + 6:
+                        nearby.append((scene[1:], norm, record))
+                    elif scene[1] == hint[1] + 1 and scene[2] <= 6:
+                        nearby.append((scene[1:], norm, record))
+        nearby.sort(key=lambda item: (item[0], item[2].identity))
+        current = [item for item in nearby if item[2].identity == anchor.identity]
+        future = [item for item in nearby if item[2].identity != anchor.identity][:6]
+        matches = {record.identity: record for _, norm, record in current + future if norm == query}
+        return next(iter(matches.values())) if len(matches) == 1 else None
 
     def _resolve_fragment(self, query, kind):
         """Exact distinctive fragment in known scene; never infer a successor.
@@ -492,12 +529,26 @@ def choice_border(image, bounds) -> bool:
         # Require a neutral edge with a darker interior, rather than lowering
         # brightness alone (which would admit scenery/HUD stripes).
         count = 0
+        gray_count = 0
         for row in range(top, bottom):
             edge = rgb.getpixel((col, row))
             inside = rgb.getpixel((min(image.width-1, col+max(4, round(6*scale))), row))
             count += min(edge)>125 and max(edge)-min(edge)<50 and min(edge)-max(inside)>45
+            gray_count += min(edge)>85 and max(edge)-min(edge)<50 and min(edge)-max(inside)>18
         if count >= (bottom - top) * .40:
             return True
+        if gray_count >= (bottom - top) * .65:
+            # Dim, unselected buttons need a second enclosing edge. An icon,
+            # uniform gray scenery or a lone vertical HUD stripe is not enough.
+            end = min(image.width, x + width)
+            xs = range(col + max(8, round(8*scale)), end, max(1, round(4*scale)))
+            for yy in list(range(max(0,round(y-20*scale)),max(0,round(y-2*scale)))) + list(
+                    range(min(image.height,round(y+height+2*scale)), min(image.height,round(y+height+22*scale)))):
+                inner_y = max(0, min(image.height-1, yy + (1 if yy < y else -1)*max(4,round(6*scale))))
+                values = [(rgb.getpixel((xx,yy)),rgb.getpixel((xx,inner_y))) for xx in xs]
+                if values and sum(min(v)>85 and max(v)-min(v)<50 and min(v)-max(inside)>18
+                                  for v,inside in values) >= len(values)*.55:
+                    return True
     return False
 
 
@@ -586,10 +637,10 @@ class AutoWuwaProcessor:
             for key, value in previous.items():
                 setattr(engine, key, value)
 
-    def _lookup(self, method, *args):
+    def _lookup(self, method, *args, **kwargs):
         started = time.perf_counter()
         try:
-            return method(*args)
+            return method(*args, **kwargs)
         finally:
             self.last_timings['lookup_ms'] = self.last_timings.get('lookup_ms', 0)+1000*(time.perf_counter()-started)
 
@@ -892,7 +943,15 @@ class AutoWuwaProcessor:
                 # context before contrast/CPU retries of the clipped dialogue.
                 for text, bounds in grouped_rows(boxes):
                     if choice_border(image, bounds):
-                        self._lookup(self.index.resolve,text, 'choices')
+                        found = self._lookup(self.index.resolve,text, 'choices', remember=False)
+                        before = dialogue_scene(self.index.context_hint)
+                        after = dialogue_scene(found.identity[1]) if found else None
+                        # An option below the current dialogue is often a later
+                        # numbered record. Do not advance past a short spoken
+                        # line merely because that option was OCR'd first.
+                        if found and (not before or (after and (
+                                before[0] != after[0] or abs(before[1]-after[1]) > 1))):
+                            self.index.set_context(found.identity[1])
             if kind == 'glossary':
                 # Modal priority even if its translation is unavailable: never
                 # paint old dialogue/buttons across the information popup.
@@ -921,12 +980,12 @@ class AutoWuwaProcessor:
             for order, (text, bounds) in enumerate(rows, 1):
                 if kind == "choices" and not choice_border(image, bounds):
                     continue
-                if kind != "choices" and (len(normalized(text)) < (12 if kind=='dialogue' else 24) or abs(bounds[0] + bounds[2] / 2 - width / 2) > width * .22):
+                if kind != "choices" and (len(normalized(text)) < (2 if kind=='dialogue' else 24) or abs(bounds[0] + bounds[2] / 2 - width / 2) > width * .22):
                     continue
                 present.append(kind)
                 detected.append(kind)
                 texts.append((kind, text))
-                record = self._lookup(self.index.resolve,text, kind)
+                record = self._lookup(self.index.resolve,text, kind, remember=kind != 'choices')
                 if (record and kind=='dialogue' and walking
                         and not walking_named
                         and (record.partial or normalized(record.speaker) != 'rover')):
@@ -936,6 +995,9 @@ class AutoWuwaProcessor:
                                                 'walking' if kind=='dialogue' and walking_confirmed else 'cinematic'))
                 else:
                     diagnostics.append(f"{kind}: không có bản Việt khớp chắc chắn cho “{text[:90]}”.")
+        anchors = [b for b in blocks if b.kind == 'dialogue'] or [b for b in blocks if b.kind == 'choices']
+        if anchors:
+            self.index.set_context(anchors[-1].identity[1])
         return self._track(AutoFrameResult(tuple(blocks), document, document_present, tuple(diagnostics), tuple(sorted(set(detected))), tuple(sorted(set(present))), tuple(texts) + document_evidence), image)
 
 

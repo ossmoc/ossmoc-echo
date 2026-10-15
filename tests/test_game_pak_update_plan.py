@@ -116,3 +116,59 @@ def test_configdb_language_steps_warn_on_failure(tmp_path: Path) -> None:
     configdb_lang = next(step for step in plan.extraction_steps if step.filter == "ConfigDB/en")
 
     assert configdb_lang.warn_on_failure is not None
+
+
+def test_folder_only_options_select_rolling_json_feed(monkeypatch):
+    from types import SimpleNamespace
+    from ludiglot.core import game_pak_update as module
+    from ludiglot.core.aes_archive import parse_aes_archive, select_keys
+    monkeypatch.setattr(module, '_is_tty', lambda: False)
+    entries = parse_aes_archive(json.dumps({'mainKey':'0x'+'1'*64,
+        'dynamicKeys':[{'guid':'fixture', 'key':'0x'+'2'*64}]}))
+    cfg = SimpleNamespace(game_version=None, game_platform='Windows', game_server='OS',
+                          game_languages=['en','zh-Hans'], game_audio_languages=None, extract_audio=False)
+    options = module._choose_options(entries, cfg)
+    assert options.version == ''
+    selection = select_keys(entries, options.version, options.platform, options.server)
+    assert selection.version_label == 'Latest' and len(selection.keys) == 2
+
+
+def test_automatic_selection_ignores_newer_beta_and_other_platform(monkeypatch):
+    from ludiglot.core.aes_archive import AesKeyEntry, select_keys
+    entries = [AesKeyEntry('3.7','3.7','main','old','Windows','OS'),
+               AesKeyEntry('3.8 (Beta)','3.8','main','beta','Windows','OS'),
+               AesKeyEntry('3.9','3.9','main','android','Android','OS')]
+    result = select_keys(entries, '', 'Windows', 'OS')
+    assert [key.aes_key for key in result.keys] == ['old']
+
+
+def test_game_root_accepts_client_game_and_launcher_folder(tmp_path):
+    from ludiglot.core.game_pak_update import resolve_game_root
+    game = tmp_path / 'Wuthering Waves Game'
+    paks = game / 'Client/Content/Paks'
+    paks.mkdir(parents=True)
+    (paks/'pakchunk0-Windows.pak').write_bytes(b'fixture')
+    for selected in (tmp_path, game, game/'Client'):
+        assert resolve_game_root(selected) == game
+
+
+def test_game_root_rejects_incomplete_install(tmp_path):
+    from ludiglot.core.game_pak_update import resolve_game_root, GamePakUpdateError
+    (tmp_path/'Client/Content/Paks').mkdir(parents=True)
+    with pytest.raises(GamePakUpdateError, match='chọn lại'):
+        resolve_game_root(tmp_path)
+
+
+@pytest.mark.parametrize('content,expected', [
+    ('{"version":"3.7.0"}', '3.7.0'),
+    ('\ufeff{"version":"3.8"}', '3.8'),
+    ('{"version":"Latest"}', None),
+    ('{"version":3.7}', None),
+    ('[]', None), ('bad JSON', None), (' '*65537, None)],
+    ids=['version','bom','rolling','numeric','array','invalid','too-large'])
+def test_optional_launcher_version_is_strict_and_bounded(tmp_path, content, expected):
+    from ludiglot.core.game_pak_update import read_launcher_game_version
+    path = tmp_path/'launcherDownloadConfig.json'
+    assert read_launcher_game_version(tmp_path) is None
+    path.write_text(content, encoding='utf-8')
+    assert read_launcher_game_version(tmp_path) == expected

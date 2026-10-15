@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.request import urlopen
 
-from ludiglot.core.aes_archive import parse_aes_archive, select_keys, list_versions
+from ludiglot.core.aes_archive import parse_aes_archive, select_keys
 
 
 AES_ARCHIVE_URL = "https://raw.githubusercontent.com/yarik0chka/wuwa-keys/main/keys.json"
@@ -53,6 +53,37 @@ class GamePakUpdatePlan:
 
 class GamePakUpdateError(RuntimeError):
     pass
+
+
+def resolve_game_root(folder: Path) -> Path:
+    """Accept the game root, its Client folder, or its launcher parent."""
+    folder = Path(folder).resolve()
+    candidates = [folder, folder / 'Wuthering Waves Game']
+    if folder.name.casefold() == 'client':
+        candidates.insert(0, folder.parent)
+    for candidate in candidates:
+        paks = candidate / 'Client' / 'Content' / 'Paks'
+        if paks.is_dir() and next(paks.rglob('*.pak'), None) is not None:
+            return candidate
+    raise GamePakUpdateError(
+        'Chưa tìm thấy dữ liệu game. Chọn thư mục Wuthering Waves Game '
+        'có Client/Content/Paks và đã tải game đầy đủ. Bạn có thể chọn lại thư mục.')
+
+
+def read_launcher_game_version(game: Path) -> str | None:
+    """Optional display metadata, not proof of extracted text provenance."""
+    try:
+        with (game / 'launcherDownloadConfig.json').open(encoding='utf-8-sig') as stream:
+            text = stream.read(65537)
+        if len(text) > 65536:
+            return None
+        data = json.loads(text)
+        version = data.get('version') if isinstance(data, dict) else None
+        if isinstance(version, str) and re.fullmatch(r'\d+\.\d+(?:\.\d+){0,2}', version.strip()):
+            return version.strip()
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return None
 
 
 def _log(progress: Callable[[str], None] | None, message: str) -> None:
@@ -212,14 +243,12 @@ def build_game_pak_update_plan(data_root: Path, options: GamePakOptions) -> Game
 
 
 def _choose_options(entries, cfg) -> GamePakOptions:
-    version_labels = list_versions(entries)
-    latest_version = version_labels[-1] if version_labels else ""
-
-    # 自动选择逻辑：优先使用配置中指定的版本，否则直接使用 AES 表中的最新版
-    version_choice = cfg.game_version or latest_version
+    # Empty means select the newest stable group for this platform/server.
+    # A rolling JSON feed is labelled Latest, not a numeric game version.
+    version_choice = cfg.game_version or ""
 
     if not _is_tty():
-        if not (version_choice and cfg.game_platform and cfg.game_server and cfg.game_languages):
+        if not (cfg.game_platform and cfg.game_server and cfg.game_languages):
             raise GamePakUpdateError("缺少 game_platform/game_server/game_languages 配置")
         return GamePakOptions(
             version=version_choice,
@@ -275,7 +304,8 @@ def update_from_game_paks(cfg, config_path: Path, output_db_path: Path, progress
 
     selection = select_keys(entries, options.version, options.platform, options.server)
     if not selection.keys:
-        raise GamePakUpdateError("未找到匹配的 AES Key，请检查版本/平台/区服")
+        raise GamePakUpdateError('Chưa có bộ khóa đọc dữ liệu phù hợp cho '
+            f'{options.platform}/{options.server}. Thử lại sau khi nguồn khóa được cập nhật; dữ liệu cũ được giữ nguyên.')
 
     _log(progress, f"[PAK] 版本: {selection.version_label} | 平台: {options.platform} | 区服: {options.server}")
     for key in selection.keys:

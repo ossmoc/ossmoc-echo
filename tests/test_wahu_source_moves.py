@@ -130,3 +130,35 @@ def test_repair_only_leaves_existing_canonical_translations_untouched(tmp_path):
            'translation_source':'wahu_exact_id_reviewed'}
     WahuTranslationProvider(path).enrich({'a':{'matches':[row,other]}},source_moves_only=True)
     assert other['official_vi']=='Existing English-name target'
+
+
+def test_proven_contraction_is_not_a_reason_to_drop_translation(tmp_path):
+    path=tmp_path/'project.db'
+    row=fixture_db(path,original="(I'm getting closer. Whoever is playing should be nearby.)",
+                   current="(I'm getting closer. Whoever's playing should be nearby.)")
+    WahuTranslationProvider(path).enrich({'a':{'matches':[row]}},source_moves_only=True)
+    assert row['translation_source']=='wahu_verified_source_move'
+
+
+def test_npc_source_move_keeps_all_sync_proof_requirements(tmp_path):
+    path=tmp_path/'project.db'; row=fixture_db(path)
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE entries_full SET key='GNNPC_Test_81_1'")
+        c.execute("UPDATE source_sync_changes SET key='GNNPC_Test_81_1'")
+    row['text_key']='GNNPC_Test_81_1'
+    assert WahuTranslationProvider(path).enrich({'a':{'matches':[row]}},source_moves_only=True).verified_source_moves==1
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE entries_full SET sync_confidence='GUESSED'")
+    row['official_vi']=''
+    WahuTranslationProvider(path).enrich({'a':{'matches':[row]}})
+    assert row['official_vi']==''
+
+
+def test_reviewed_rephrasing_is_specific_to_its_identity_and_chinese():
+    from ludiglot.adapters.wuthering_waves.wahu import _reviewed_source_rephrasing
+    args=('Main_Mengzhou_3_6_170_8','又有夜归军的支援了啊。',
+          'So the Midnight Rangers came.','So the Midnight Rangers showed up with backup.')
+    assert _reviewed_source_rephrasing(*args)
+    assert not _reviewed_source_rephrasing('Main_Test_1_2',*args[1:])
+    assert not _reviewed_source_rephrasing(args[0],'Different Chinese',*args[2:])
+    assert not _reviewed_source_rephrasing(*args[:3],'So the Midnight Rangers showed up without backup.')

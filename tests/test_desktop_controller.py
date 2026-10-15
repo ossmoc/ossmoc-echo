@@ -148,7 +148,98 @@ def test_initialization_migrates_without_loading_engine_or_replacing_unknown_set
     assert controller.raw["unknown"] == {"keep": 42}
     assert controller.store.load_raw()["unknown"] == {"keep": 42}
     assert controller.raw["overlay"]["background"] == "none"
-    assert len(controller._hotkeys.bindings) == 4
+    assert len(controller._hotkeys.bindings) == 5
+
+
+def prepare_screenshot(controller,monkeypatch):
+    from PIL import Image
+    from PyQt6.QtGui import QImage,QPixmap,QColor
+    from types import SimpleNamespace
+    bounds={'left':-10,'top':80,'width':40,'height':20}
+    game=Image.new('RGB',(40,20),'blue'); game.info['capture_bounds']=bounds
+    controller.raw['window_capture']={'mode':'window'}
+    controller.capture_adapter.window_capture=SimpleNamespace(image=lambda timeout:game,close=lambda:None)
+    controller._last_capture_bounds=bounds
+    controller.auto_overlay.auto_blocks=('verified',)
+    overlay=QImage(40,20,QImage.Format.Format_RGBA8888); overlay.fill(QColor('transparent'))
+    overlay.setPixelColor(20,10,QColor('green'))
+    monkeypatch.setattr(controller.auto_overlay,'grab',lambda:QPixmap.fromImage(overlay))
+    return bounds
+
+
+def test_screenshot_copies_composite_and_saves_png_without_changing_session(controller,monkeypatch,qapp):
+    from PyQt6.QtGui import QImage,QColor
+    prepare_screenshot(controller,monkeypatch)
+    before=(controller.session.generation,controller.session.running,controller.store.load_raw())
+    image=controller.capture_translated_screenshot()
+    assert image.pixelColor(20,10)==QColor('green') and image.pixelColor(0,0)==QColor('blue')
+    assert qapp.clipboard().mimeData().hasImage()
+    assert qapp.clipboard().image().pixelColor(20,10)==QColor('green')
+    files=list((controller.paths.data_root/'screenshots').glob('*.png'))
+    assert len(files)==1 and QImage(str(files[0])).pixelColor(20,10)==QColor('green')
+    assert (controller.session.generation,controller.session.running,controller.store.load_raw())==before
+    assert 'Ctrl+V' in controller.status and not controller._capturing_screenshot
+
+
+def test_disk_failure_still_copies_screenshot(controller,monkeypatch,qapp):
+    from ludiglot.ui import translated_screenshot
+    prepare_screenshot(controller,monkeypatch)
+    def fail(*_):raise OSError('Disk unavailable')
+    monkeypatch.setattr(translated_screenshot,'save_screenshot_png',fail)
+    assert controller.capture_translated_screenshot() is not None
+    assert qapp.clipboard().mimeData().hasImage()
+    assert 'Chưa lưu được PNG' in controller.status
+
+
+def test_unavailable_game_keeps_clipboard_and_never_captures_desktop(controller,monkeypatch,qapp):
+    from ludiglot.core.window_capture import CaptureUnavailable
+    prepare_screenshot(controller,monkeypatch)
+    qapp.clipboard().setText('Previous clipboard')
+    def fail(**_):raise CaptureUnavailable('Game đang thu nhỏ')
+    controller.capture_adapter.window_capture.image=fail
+    monkeypatch.setattr(controller.capture_adapter,'capture_desktop_snapshot',lambda:pytest.fail('No desktop fallback'))
+    assert controller.capture_translated_screenshot() is None
+    assert qapp.clipboard().text()=='Previous clipboard'
+    assert 'thu nhỏ' in controller.status and not (controller.paths.data_root/'screenshots').exists()
+
+
+def test_screenshot_button_without_selected_game_keeps_clipboard(controller,qapp):
+    qapp.clipboard().setText('Keep me')
+    assert controller.capture_translated_screenshot() is None
+    assert qapp.clipboard().text()=='Keep me' and 'Chọn game' in controller.status
+
+
+@pytest.mark.parametrize('reason',['hidden','geometry'])
+def test_screenshot_does_not_reuse_hidden_or_wrong_frame_translation(controller,monkeypatch,reason):
+    from PyQt6.QtGui import QColor
+    prepare_screenshot(controller,monkeypatch)
+    if reason=='hidden':controller.overlay.user_hidden=True
+    else:controller._last_capture_bounds={**controller._last_capture_bounds,'left':100}
+    monkeypatch.setattr(controller.auto_overlay,'grab',lambda:pytest.fail('Do not render this layer'))
+    image=controller.capture_translated_screenshot()
+    assert image.pixelColor(20,10)==QColor('blue')
+
+
+def test_screenshot_shortcut_is_customizable_and_conflicts_fail_without_losing_old(controller):
+    assert controller.raw['hotkey_screenshot']=='alt+s'
+    assert not controller.save_hotkeys({'hotkey_screenshot':controller.raw['hotkey_capture']})
+    assert controller.raw['hotkey_screenshot']=='alt+s'
+    assert controller.save_hotkeys({'hotkey_screenshot':'ctrl+shift+f9'})
+    assert controller.store.load_raw()['hotkey_screenshot']=='Ctrl+Shift+F9'
+    binding=next(b for b in controller._hotkeys.bindings if b.name=='screenshot')
+    assert binding.hotkey=='Ctrl+Shift+F9'
+
+
+def test_screenshot_shortcut_startup_failure_does_not_remove_start_shortcut(controller,monkeypatch):
+    class RejectScreenshot(FakeHotkeys):
+        last_error='Alt+S bị app khác dùng'
+        def register(self,bindings):
+            return None if any(b.name=='screenshot' for b in bindings) else super().register(bindings)
+    monkeypatch.setattr(controller_module,'WindowsNativeHotkeyAdapter',RejectScreenshot)
+    controller.auto_only=True
+    assert not controller._register_hotkeys()
+    assert [b.name for b in controller._hotkeys.bindings]==['capture']
+    assert 'Alt+S' in controller.status and 'vẫn dùng được' in controller.status
 
 
 @pytest.mark.parametrize('hidden', [False, True])
@@ -441,12 +532,12 @@ def test_joint_check_keeps_app_result_when_translation_network_fails(controller,
     from types import SimpleNamespace
     from ludiglot.core.app_update import AppRelease
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.0.4', '', 10, '')
+    app_release = AppRelease('v1.0.5', '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.0.4' in controller.app_update_summary
+    assert controller.app_update_available and 'v1.0.5' in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 
@@ -502,7 +593,7 @@ def test_usage_guide_is_available_after_onboarding(controller, monkeypatch):
     controller.raw['desktop_onboarding_done']=True
     controller.show_usage_guide()
     assert 'không chọn .exe hoặc .pak' in messages[0]
-    assert 'phiên bản game đang cài' in messages[0]
+    assert 'không cần nhập phiên bản' in messages[0]
     assert messages[0].index('Chuẩn bị') < messages[0].index('Bắt đầu dịch')
 
 
@@ -767,7 +858,7 @@ def test_echo_migration_removes_active_manual_regions_and_old_hotkeys_but_preser
         assert echo.regions==[] and echo.special_region_id=='' and echo.auto_mode
         assert echo.raw['auto_wuwa']['font_size']==38 and echo.raw['auto_wuwa']['background_color']=='#334455'
         assert echo.raw['unknown']=={'keep':42}
-        assert [binding.name for binding in echo._bindings(echo.raw,[]) ]==['capture']
+        assert [binding.name for binding in echo._bindings(echo.raw,[]) ]==['capture','screenshot']
         assert echo.raw['hotkey_capture']=='Ctrl+F8' and not echo.raw['hotkey_exception']
         assert (controller.paths.config_path.parent/'settings.before-echo.json').is_file()
         assert not echo.session.running
@@ -782,6 +873,110 @@ def test_echo_requires_game_and_only_schedules_auto(controller):
     controller._sync_session_regions()
     assert list(controller.session._regions)==['__auto_wuwa__']
     assert not controller._auto_safe_to_start() and 'Chọn game' in controller.status
+
+
+def make_game_folder(tmp_path, name='game'):
+    game = tmp_path/name
+    paks = game/'Client/Content/Paks'
+    paks.mkdir(parents=True)
+    (paks/'pakchunk0.pak').write_bytes(b'fixture')
+    return game
+
+
+def test_rescan_always_reopens_picker_and_cancel_preserves_settings(controller, tmp_path, monkeypatch):
+    game = make_game_folder(tmp_path)
+    controller.raw['game_install_root'] = str(game)
+    before = controller.store.load_raw()
+    picks = []
+    monkeypatch.setattr(controller_module.QFileDialog, 'getExistingDirectory',
+        lambda *_a: picks.append(_a) or '')
+    monkeypatch.setattr(controller, '_start_job', lambda *_a, **_k: pytest.fail('Cancelled'))
+    controller.rescan_game(); controller.rescan_game()
+    assert len(picks) == 2 and picks[0][2] == str(game)
+    assert controller.store.load_raw() == before
+
+
+def test_invalid_rescan_folder_can_be_reselected_without_saving(controller, tmp_path, monkeypatch):
+    valid = make_game_folder(tmp_path)
+    picks = iter([str(tmp_path/'missing'), str(valid)])
+    monkeypatch.setattr(controller_module.QFileDialog, 'getExistingDirectory', lambda *_a:next(picks))
+    calls = []
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work, **_k:calls.append((kind, work)))
+    before = controller.store.load_raw()
+    controller.rescan_game()
+    assert not calls and 'chọn lại' in controller.status
+    controller.rescan_game()
+    assert calls[0][0] == 'rescan'
+    assert controller.store.load_raw() == before
+
+
+def test_rescan_worker_ignores_stale_version_and_preserves_data_on_failure(controller, tmp_path, monkeypatch):
+    from ludiglot.core import game_pak_update as module
+    game = make_game_folder(tmp_path)
+    controller.raw.update(game_version='1.0.3', official_source_version='3.7')
+    before_raw = copy.deepcopy(controller.raw)
+    before_store = controller.store.load_raw()
+    monkeypatch.setattr(controller_module.QFileDialog, 'getExistingDirectory', lambda *_a:str(game))
+    jobs = []
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work, **_k:jobs.append(work))
+    def fail(cfg, stage_config, cache, **kwargs):
+        assert cfg.game_install_root == game and cfg.game_version is None
+        assert cfg.game_platform == 'Windows' and cfg.game_server == 'OS'
+        assert cfg.game_languages == ['en','zh-Hans']
+        raise RuntimeError('fixture extraction failed')
+    monkeypatch.setattr(module, 'update_from_game_paks', fail)
+    controller.rescan_game()
+    with pytest.raises(RuntimeError, match='fixture extraction failed'):
+        jobs[0]()
+    controller._maintenance=True
+    controller._on_job_finished({'kind':'rescan','error':'fixture extraction failed','resume':False})
+    assert not controller._maintenance
+    assert controller.raw == before_raw and controller.store.load_raw() == before_store
+
+
+def test_successful_rescan_commits_folder_without_inventing_version(controller, tmp_path, monkeypatch):
+    from ludiglot.core import game_pak_update as module
+    game = make_game_folder(tmp_path)
+    (game/'launcherDownloadConfig.json').write_text('{"version":"3.7.0"}', encoding='utf-8')
+    controller.raw.update(game_version='1.0.3', official_source_version='3.7')
+    monkeypatch.setattr(controller_module.QFileDialog, 'getExistingDirectory', lambda *_a:str(game))
+    def extract(cfg, stage_config, cache, **kwargs):
+        cache.write_text(__import__('json').dumps({str(i):{'matches':[{
+            'official_en':'Source sentence '+str(i),'source_json':'lang.db','text_key':str(i)}]}
+            for i in range(cfg.min_db_entries)}), encoding='utf-8')
+    monkeypatch.setattr(module, 'update_from_game_paks', extract)
+    jobs = []
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work, **_k:jobs.append(work))
+    monkeypatch.setattr(controller, 'initialize', lambda **_k:None)
+    controller.rescan_game()
+    result = jobs[0]()
+    assert result.manifest['source_version'] is None
+    assert result.manifest['detected_game_version'] == '3.7.0'
+    assert not controller.store.load_raw().get('game_install_root')
+    controller._on_job_finished({'kind':'rescan','result':result,'resume':False})
+    saved = controller.store.load_raw()
+    assert saved['game_install_root'] == str(game)
+    assert saved['game_version'] is None and saved['official_source_version'] is None
+    assert result.cache_path.is_file()
+
+
+def test_rescan_rejects_non_english_output_before_activating(controller, tmp_path, monkeypatch):
+    import json
+    from ludiglot.core import game_pak_update as module
+    game = make_game_folder(tmp_path)
+    monkeypatch.setattr(controller_module.QFileDialog, 'getExistingDirectory', lambda *_a:str(game))
+    jobs = []
+    monkeypatch.setattr(controller, '_start_job', lambda kind, work, **_k:jobs.append(work))
+    monkeypatch.setattr(controller, '_updater', lambda:pytest.fail('Do not activate invalid data'))
+    def extract(cfg, stage_config, cache, **kwargs):
+        cache.write_text(json.dumps({str(i):{'matches':[{'official_en':'','official_cn':'Chinese only'}]}
+            for i in range(cfg.min_db_entries)}), encoding='utf-8')
+    monkeypatch.setattr(module, 'update_from_game_paks', extract)
+    before = controller.store.load_raw()
+    controller.rescan_game()
+    with pytest.raises(ValueError, match='quá ít'):
+        jobs[0]()
+    assert controller.store.load_raw() == before
 
 
 def test_story_choice_and_side_memory_persist_without_guessing_or_resuming(controller):

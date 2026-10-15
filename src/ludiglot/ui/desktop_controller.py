@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QGuiApplication, QTextDocument
-from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from ludiglot.core.app_paths import AppPaths
 from ludiglot.version import APP_VERSION
@@ -92,6 +92,7 @@ class DesktopController(QObject):
         self.engine = self.matcher = self.param_resolver = None
         self._hotkeys = None
         self._hotkey_edit_depth = 0
+        self._capturing_screenshot = False
         self._run_intent = False
         self._auto_revision = 0
         self.auto_processor = None
@@ -267,7 +268,7 @@ class DesktopController(QObject):
         self.data_summary = f"{payload['count']:,} nhóm tra cứu • OCR English • tên tiếng Anh\nDữ liệu: {self.config.db_path}"
         coverage = payload.get("coverage", {})
         self.data_summary += f"\n{coverage.get('vietnamese', 0):,} câu Việt • {coverage.get('english_fallback', 0):,} câu fallback English"
-        self.data_summary += "\nNguồn game: " + str(self.raw.get("official_source_version") or "chưa xác định; quét lại sau khi game cập nhật")
+        self.data_summary += "\nNguồn game: " + str(self.raw.get("official_source_version") or "dữ liệu cục bộ; làm mới sau khi game cập nhật")
         try:
             manifest = self._updater().active_manifest()
             if manifest:
@@ -290,7 +291,57 @@ class DesktopController(QObject):
         return self.config.db_path.is_file()
 
     def show_usage_guide(self):
-        QMessageBox.information(None, 'Hướng dẫn sử dụng Ossmoc Echo', USAGE_GUIDE)
+        key = self.raw.get('hotkey_screenshot') or 'nút Chụp kèm bản dịch'
+        QMessageBox.information(None, 'Hướng dẫn sử dụng Ossmoc Echo', USAGE_GUIDE +
+            f'\n\nChụp kèm bản dịch: dùng {key}. Ảnh tự vào clipboard để Ctrl+V; '
+            'PNG được lưu thêm trong userdata/screenshots cạnh app. Không cần dừng dịch.')
+
+    def capture_translated_screenshot(self):
+        """Export only the selected game, without disturbing OCR or focus."""
+        if self._closed or self._capturing_screenshot:
+            return None
+        if not self.window_capture_mode:
+            self._set_status('Chọn game trước khi chụp kèm bản dịch.')
+            return None
+        self._capturing_screenshot = True
+        try:
+            from ludiglot.ui.translated_screenshot import compose_game_image, save_screenshot_png
+            # WGC already owns copied pixels; timeout zero never blocks the UI
+            # waiting for a minimized/closed window or falls back to desktop.
+            game = self.capture_adapter.window_capture.image(timeout=0)
+            bounds = game.info.get('capture_bounds')
+            if not bounds:
+                raise ValueError('Chưa xác định được khung game. Hãy thử chụp lại.')
+            layers = []
+            skipped_geometry = self._last_capture_bounds != bounds and bool(self.auto_overlay.auto_blocks or self.auto_reader.document_id)
+            # A moved/resized game must not reuse geometry from an older frame.
+            # Background-hidden layers can be exported from the app's button,
+            # but explicit user hiding/dismissal is always respected.
+            if not self.overlay.user_hidden and self._last_capture_bounds == bounds:
+                if self.auto_overlay.auto_blocks:
+                    layers.append((self.auto_overlay.grab().toImage(), bounds))
+                reader = self.auto_reader
+                if reader.document_id and reader.dismissed_id != reader.document_id:
+                    physical = reader.region_bounds_physical()
+                    if physical:
+                        layers.append((reader.grab().toImage(), physical))
+            image = compose_game_image(game, bounds, layers)
+            # Clipboard comes first: disk failures must not prevent Ctrl+V.
+            QApplication.clipboard().setImage(image)
+            try:
+                path = save_screenshot_png(image, self.paths.data_root/'screenshots')
+            except Exception as exc:
+                self._set_status(f'Đã copy ảnh vào clipboard — Ctrl+V để dán. Chưa lưu được PNG: {exc}')
+                return image
+            self._set_status('Đã copy ảnh vào clipboard — Ctrl+V để dán. Đã lưu PNG.'+
+                (' Khung game vừa đổi: ảnh này chưa kèm lớp dịch, chờ lượt dịch mới rồi chụp lại.' if skipped_geometry else ''))
+            self.log_message.emit('Đã lưu ảnh chụp theo yêu cầu: '+str(path))
+            return image
+        except Exception as exc:
+            self._set_status('Không chụp được ảnh game; clipboard cũ được giữ. '+str(exc))
+            return None
+        finally:
+            self._capturing_screenshot = False
 
     @property
     def translation_version_summary(self):
@@ -298,9 +349,13 @@ class DesktopController(QObject):
             manifest = self._updater().active_manifest() or {}
         except Exception:
             manifest = {}
+        detected = manifest.get('detected_game_version')
+        game_data = (f'{detected} (tự nhận diện)' if detected and self.has_english_data
+                     else self.raw.get('official_source_version') or
+                     ('đã chuẩn bị (tự động)' if self.has_english_data else 'chưa chuẩn bị'))
         return (f"Bản dịch đang dùng: {manifest.get('release_tag') or 'chưa xác định'}\n"
                 f"WuWa được bản dịch hỗ trợ: {manifest.get('translation_game_version') or 'chưa xác định'}\n"
-                f"Dữ liệu game đã quét: {self.raw.get('official_source_version') or 'chưa xác định'}")
+                f"Dữ liệu game: {game_data}")
 
     @property
     def auto_mode(self):
@@ -1017,7 +1072,7 @@ class DesktopController(QObject):
         if not spec:
             self._set_status(f"Phím tắt không hợp lệ: {hotkey}")
             return False
-        keys = all_keys if all_keys is not None else [self.raw.get(k, "") for k in ("hotkey_capture", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")] + [r.hotkey for r in self.regions if r.id != excluded_region and r.hotkey]
+        keys = all_keys if all_keys is not None else [self.raw.get(k, "") for k in ("hotkey_capture", "hotkey_screenshot", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")] + [r.hotkey for r in self.regions if r.id != excluded_region and r.hotkey]
         if any(parse_win_hotkey(str(key)) == spec for key in keys if key):
             self._set_status(f"Phím tắt bị trùng: {hotkey}")
             return False
@@ -1026,13 +1081,13 @@ class DesktopController(QObject):
     def save_hotkeys(self, mapping):
         from ludiglot.ui.hotkey_editor import canonical_hotkey
         try:
-            mapping = {k: canonical_hotkey(v) for k, v in mapping.items() if k in ("hotkey_capture", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")}
+            mapping = {k: canonical_hotkey(v) for k, v in mapping.items() if k in ("hotkey_capture", "hotkey_screenshot", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")}
         except ValueError as exc:
             self._set_status(str(exc))
             return False
         checked = []
         proposed = {**self.raw, **mapping}
-        for key in ("hotkey_capture", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select"):
+        for key in ("hotkey_capture", "hotkey_screenshot", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select"):
             value = proposed.get(key, "")
             if value and not self._hotkey_valid(value, all_keys=checked + [r.hotkey for r in self.regions if r.hotkey]):
                 return False
@@ -1070,10 +1125,11 @@ class DesktopController(QObject):
 
     def _bindings(self, raw, regions):
         if self.auto_only:
-            key = str(raw.get('hotkey_capture') or '')
-            return (HotkeyBinding('capture',key,self.toggle_realtime),) if key else ()
+            return tuple(HotkeyBinding(name,str(raw.get(key)),callback) for name,key,callback in (
+                ('capture','hotkey_capture',self.toggle_realtime),
+                ('screenshot','hotkey_screenshot',self.capture_translated_screenshot)) if raw.get(key))
         bindings = [HotkeyBinding(name, str(raw.get(key) or ""), callback) for name, key, callback in (
-            ("capture", "hotkey_capture", self.toggle_realtime), ("toggle", "hotkey_toggle", self.toggle_overlay),
+            ("capture", "hotkey_capture", self.toggle_realtime), ("screenshot", "hotkey_screenshot", self.capture_translated_screenshot), ("toggle", "hotkey_toggle", self.toggle_overlay),
             ("exception", "hotkey_exception", self.scan_special), ("exception_select", "hotkey_exception_select", lambda: self.select_region(self.special_region_id))
         ) if raw.get(key)]
         bindings += [HotkeyBinding("region_" + r.id, r.hotkey, lambda rid=r.id: self.region_hotkey_action(rid)) for r in regions if r.hotkey]
@@ -1108,6 +1164,14 @@ class DesktopController(QObject):
                 self._hotkeys = adapter.register(old) if old else None
                 if old and self._hotkeys is None:
                     error += " Không khôi phục được đăng ký cũ; cấu hình cũ vẫn được giữ."
+            elif self.auto_only:
+                # A newly introduced screenshot shortcut must not take away
+                # the user's existing start/pause shortcut on startup conflict.
+                prior = tuple(b for b in bindings if b.name != 'screenshot')
+                if prior:
+                    self._hotkeys = WindowsNativeHotkeyAdapter(no_repeat=True).register(prior)
+                    if self._hotkeys:
+                        error += ' Phím bắt đầu/tạm dừng vẫn dùng được; có thể chụp bằng nút trong app hoặc đổi phím chụp.'
             self._set_status(error)
             self.log_message.emit(error)
             return False
@@ -1153,7 +1217,7 @@ class DesktopController(QObject):
     def _validate_region_hotkeys(self, regions):
         from ludiglot.ui.qt_hotkey_adapter import parse_win_hotkey
         specs = set()
-        values = [self.raw.get(k, "") for k in ("hotkey_capture", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")]
+        values = [self.raw.get(k, "") for k in ("hotkey_capture", "hotkey_screenshot", "hotkey_toggle", "hotkey_exception", "hotkey_exception_select")]
         values += [r.hotkey for r in regions if r.hotkey]
         for value in values:
             if not value:
@@ -1473,8 +1537,11 @@ class DesktopController(QObject):
             self._refresh_update_status(manifest)
             if manifest.get("official_data_root"):
                 changes["data_root"] = manifest["official_data_root"]
-            if manifest.get("source_version"):
+            if "source_version" in manifest:
                 changes["official_source_version"] = manifest["source_version"]
+            if payload['kind'] == 'rescan':
+                changes.update(game_install_root=manifest['game_install_root'],
+                               use_game_paks=True, game_version=None)
             self.raw.update(changes)
             self.raw["auto_wuwa"]["context_hint"] = ""
             self.raw['auto_wuwa']['story_group'] = ''
@@ -1487,54 +1554,70 @@ class DesktopController(QObject):
     def rescan_game(self):
         if self._maintenance:
             return
-        root = self.raw.get("game_install_root")
-        if not root or not Path(root).is_dir():
-            root = QFileDialog.getExistingDirectory(None, "Chọn thư mục Wuthering Waves Game có Client — không chọn file EXE/PAK")
-            if not root:
-                return
-        # Explicit user-selected source version: never silently pick newest AES keys.
-        version, ok = QInputDialog.getText(None, "Phiên bản game", "Phiên bản Wuthering Waves đang cài (ví dụ 3.7), không phải phiên bản Ossmoc Echo:", text=str(self.raw.get("official_source_version") or self.raw.get("game_version") or ""))
-        if not ok or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version.strip()):
-            self._set_status("Đã hủy: cần phiên bản game hợp lệ để chọn dữ liệu giải nén.")
+        root = QFileDialog.getExistingDirectory(None,
+            "Chọn thư mục Wuthering Waves Game", str(self.raw.get('game_install_root') or ''))
+        if not root:
             return
-        game = Path(root).resolve()
+        from ludiglot.core.game_pak_update import resolve_game_root, GamePakUpdateError
+        try:
+            game = resolve_game_root(Path(root))
+        except (OSError, GamePakUpdateError) as exc:
+            self._set_status(str(exc))
+            return
         if self.paths.data_root.resolve().is_relative_to(game):
             self._set_status("Không được đặt thư mục dữ liệu app trong thư mục game. Hãy chuyển app ra ngoài.")
             return
-        self.raw.update(game_install_root=str(game), use_game_paks=True, game_version=version.strip())
-        self.store.update_values(game_install_root=str(game), use_game_paks=True, game_version=version.strip())
-        cfg = self._load_config()
+        # Stage only: a failed import must not persist an unusable folder or
+        # replace a working cache. Ignore legacy manually entered versions.
+        cfg = replace(self._load_config(), game_install_root=game,
+                      use_game_paks=True, game_version=None,
+                      game_platform='Windows', game_server=self.raw.get('game_server') or 'OS',
+                      game_languages=['en', 'zh-Hans'])
+        snapshot = copy.deepcopy(self.raw)
+        self._set_status('Đang chuẩn bị dữ liệu English bằng bộ khóa mới nhất…')
         def work():
-            from ludiglot.core.game_pak_update import update_from_game_paks
+            from ludiglot.core.game_pak_update import update_from_game_paks, read_launcher_game_version
             from ludiglot.core.translation_update import TranslationUpdateCancelled
             stage = self.paths.updates / "generations" / ("game-" + uuid4().hex)
             stage.mkdir(parents=True)
             stage_config = stage / "settings.json"
             cache = stage / "cache.json"
-            raw = dict(self.raw)
+            raw = dict(snapshot)
             for key in ("data_root", "en_json", "zh_json", "db_path", "wahu_db_path", "image_path"):
                 value = getattr(cfg, key, None)
                 if value:
                     raw[key] = str(value)
-            raw.update(data_root=str(stage / "data"), db_path=str(cache), extract_audio=False, auto_rebuild_db=False)
+            raw.update(data_root=str(stage / "data"), db_path=str(cache), extract_audio=False,
+                       auto_rebuild_db=False, game_install_root=str(game), use_game_paks=True,
+                       game_version=None, game_platform=cfg.game_platform,
+                       game_server=cfg.game_server, game_languages=cfg.game_languages)
             atomic_write_json(stage_config, raw)
-            staged_cfg = replace(cfg, data_root=stage / "data", db_path=cache, extract_audio=False, game_version=version.strip())
+            staged_cfg = replace(cfg, data_root=stage / "data", db_path=cache, extract_audio=False)
             def progress(message):
                 self._status.emit(message)
                 if self._job_cancel.is_set():
                     raise TranslationUpdateCancelled("Đã hủy quét lại dữ liệu game")
             update_from_game_paks(staged_cfg, stage_config, cache, progress=progress)
             with cache.open(encoding="utf-8") as stream:
-                if len(json.load(stream)) < cfg.min_db_entries:
+                data = json.load(stream)
+                if (not isinstance(data, dict) or len(data) < cfg.min_db_entries
+                        or sum(isinstance(row, dict) and bool(str(row.get('official_en') or '').strip())
+                               for entry in data.values()
+                               if isinstance(entry, dict) and isinstance(entry.get('matches'), list)
+                               for row in entry['matches']) < cfg.min_db_entries):
                     raise ValueError("Dữ liệu game quét được quá ít; giữ bộ dữ liệu đang dùng.")
+                del data
             updater = self._updater()
             current = updater.active_manifest()
             baseline = {"schema_version": 1, "generation_id": "baseline", "cache_path": str(cfg.db_path),
                         "database_path": str(cfg.wahu_db_path) if cfg.wahu_db_path else None,
-                        "official_data_root": str(cfg.data_root), "source_version": self.raw.get("official_source_version"),
+                        "official_data_root": str(cfg.data_root), "source_version": snapshot.get("official_source_version"),
                         "release_tag": None, "variant": "en", "source_kind": "existing_baseline"}
             metadata = {key: current[key] for key in ("release_tag", "release", "variant", "translation_game_version", "hashes", "canonical_en_path") if key in current}
-            metadata.update(official_data_root=str(stage / "data"), source_version=version.strip())
+            # The rolling feed cannot prove a numeric source version. Keep
+            # exact source-English checks enabled rather than guessing one.
+            metadata.update(official_data_root=str(stage / "data"), source_version=None,
+                            game_install_root=str(game), detected_game_version=read_launcher_game_version(game))
             return updater.activate_prepared(cache, cfg.wahu_db_path, metadata=metadata, baseline=baseline if cfg.db_path.is_file() else None, cancel=self._job_cancel)
         self._start_job("rescan", work, pause=True)
 

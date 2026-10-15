@@ -119,7 +119,7 @@ def run_desktop(config_path: Path | None = None, smoke_report: Path | None = Non
                             'translation_label':panel.translation_version_label.text().split('\n')[0],
                             'pages':[panel.navigation.item(i).text() for i in range(panel.navigation.count())],
                             'brand':panel.windowTitle(), 'manual_regions_removed':not hasattr(panel,'region_table'),
-                            'only_start_hotkey':len(controller._bindings(controller.raw,controller.regions))<=1,
+                            'only_echo_hotkeys':all(b.name in {'capture','screenshot'} for b in controller._bindings(controller.raw,controller.regions)),
                             'auto_only':controller.auto_only and controller.auto_mode}
                 for page_number in range(panel.pages.count()):
                     panel.navigation.setCurrentRow(page_number); app.processEvents()

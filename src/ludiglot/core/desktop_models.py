@@ -55,7 +55,7 @@ OVERLAY_DEFAULTS = {
     "show_source": False, "width": 900, "height": 200,
 }
 
-HOTKEY_DEFAULTS = {"hotkey_capture": "alt+w", "hotkey_toggle": "alt+h",
+HOTKEY_DEFAULTS = {"hotkey_capture": "alt+w", "hotkey_screenshot": "alt+s", "hotkey_toggle": "alt+h",
                    "hotkey_exception": "alt+e", "hotkey_exception_select": "alt+shift+e"}
 AUTO_DEFAULTS = {
     "mode": "regions", "bounds": None, "screen": None,

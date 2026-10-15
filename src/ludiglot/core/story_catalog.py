@@ -5,7 +5,7 @@ import re
 
 def dialogue_scene(key):
     # Both versioned Main IDs and unversioned Side IDs end in scene/line.
-    match = re.fullmatch(r'((?:Main|Side)_[A-Za-z0-9_]+)_(\d+)_(\d+)', str(key))
+    match = re.fullmatch(r'((?:Main|Side|GNNPC)_[A-Za-z0-9_]+)_(\d+)_(\d+)', str(key))
     return (match[1], int(match[2]), int(match[3])) if match else None
 
 
