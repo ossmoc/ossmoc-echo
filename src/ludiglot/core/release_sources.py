@@ -14,6 +14,7 @@ _VERSION = re.compile(r'^(\d+)\.(\d+)_part\d+\.txt$')
 
 def rebuild_from_release_sources(archive, target, canonical, check_cancel):
     references = {}
+    masked = {}
     # identity -> (source version, table, English); ambiguity is sticky within
     # a version. Older snapshots cannot overwrite newer source references.
     with zipfile.ZipFile(archive) as package:
@@ -46,6 +47,14 @@ def rebuild_from_release_sources(archive, target, canonical, check_cancel):
                 if identity not in canonical:
                     return
                 english = '\n'.join(fields['EN']).strip()
+                chinese = '\n'.join(fields.get('CN',[])).strip()
+                if (english and set(english)=={'*'} and chinese and set(chinese)=={'*'}):
+                    old=masked.get(identity)
+                    value=(source_version,table)
+                    if old is None or old[0]<source_version:
+                        masked[identity]=value
+                    elif old[0]==source_version and old!=value:
+                        masked[identity]=(source_version,None)
                 if not english or set(english) == {'*'}:
                     return
                 value = (source_version, table, english)
@@ -81,6 +90,9 @@ def rebuild_from_release_sources(archive, target, canonical, check_cancel):
         target_text = canonical.get(identity, '')
         if table and english and target_text.strip() and target_text.strip() != english.strip():
             rows.append((*identity, english, target_text, 'final'))
+    from ludiglot.core.release_redirects import story_redirects
+    proofs=story_redirects(archive,canonical,masked,{row[:2] for row in rows},check_cancel)
+    rows.extend((p[0],p[1],p[5],p[7],'final') for p in proofs)
     if not rows:
         raise ValueError('Không có ID với nguồn English rõ ràng trong gói bản dịch; giữ bản cũ.')
     with sqlite3.connect(target) as connection:
@@ -89,6 +101,8 @@ def rebuild_from_release_sources(archive, target, canonical, check_cancel):
             ('name_mode','en'), ('derived_from','same_release_sources_and_canonical_en_pak')])
         connection.execute('CREATE TABLE entries(dbfile TEXT,key TEXT,en TEXT,vi TEXT,status TEXT,PRIMARY KEY(dbfile,key))')
         connection.executemany('INSERT INTO entries VALUES (?,?,?,?,?)', rows)
+        connection.execute('CREATE TABLE release_source_proofs(dbfile TEXT,key TEXT,source_dbfile TEXT,tbl TEXT,version TEXT,en TEXT,cn TEXT,vi TEXT,PRIMARY KEY(dbfile,key))')
+        connection.executemany('INSERT INTO release_source_proofs VALUES (?,?,?,?,?,?,?,?)',proofs)
     return target
 
 

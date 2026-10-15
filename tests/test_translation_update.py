@@ -43,6 +43,17 @@ def test_compare_installed_release_numerically(installed_tag, available):
     assert "README" not in message
 
 
+def test_seed_source_repair_is_offered_for_same_release_without_downgrade():
+    from ludiglot.core.translation_update import translation_update_status,SOURCE_BUILD_REVISION
+    release=ReleaseInfo('v3.0.17')
+    installed={'release_tag':'v3.0.17','database_name_mode':'packaged_seed','source_build_revision':2}
+    assert translation_update_status(release,installed)[0]
+    installed['source_build_revision']=SOURCE_BUILD_REVISION
+    assert not translation_update_status(release,installed)[0]
+    installed.update(release_tag='v3.0.18',source_build_revision=2)
+    assert not translation_update_status(release,installed)[0]
+
+
 def database(path: Path, mode: str = "en", *, text: str = "Xin chao Jinhsi", english: str = "Hello Jinhsi") -> bytes:
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE entries(dbfile TEXT,key TEXT,en TEXT,vi TEXT,status TEXT,PRIMARY KEY(dbfile,key))")

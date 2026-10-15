@@ -1635,7 +1635,7 @@ class DesktopController(QObject):
                         "database_path": str(cfg.wahu_db_path) if cfg.wahu_db_path else None,
                         "official_data_root": str(cfg.data_root), "source_version": snapshot.get("official_source_version"),
                         "release_tag": None, "variant": "en", "source_kind": "existing_baseline"}
-            metadata = {key: current[key] for key in ("release_tag", "release", "variant", "translation_game_version", "hashes", "canonical_en_path") if key in current}
+            metadata = {key: current[key] for key in ("release_tag", "release", "variant", "translation_game_version", "hashes", "canonical_en_path", "database_name_mode", "source_build_revision") if key in current}
             # The rolling feed cannot prove a numeric source version. Keep
             # exact source-English checks enabled rather than guessing one.
             metadata.update(official_data_root=str(stage / "data"), source_version=None,

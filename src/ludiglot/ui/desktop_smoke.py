@@ -121,7 +121,10 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
             image = original.convert("RGB")
         frame = controller.auto_processor.process(image, controller.engine, settings, force=True)
         blocks = tuple(replace(b, bounds=(round(b.bounds[0]*width/image.width), round(b.bounds[1]*height/image.height),
-                                          round(b.bounds[2]*width/image.width), round(b.bounds[3]*height/image.height))) for b in frame.blocks)
+                                            round(b.bounds[2]*width/image.width), round(b.bounds[3]*height/image.height)),
+                                viewport=(round(b.viewport[0]*width/image.width),round(b.viewport[1]*height/image.height),
+                                          round(b.viewport[2]*width/image.width),round(b.viewport[3]*height/image.height))
+                                if b.viewport else None) for b in frame.blocks)
         inline.set_frame(bounds, blocks, settings)
         inline.show(); app.processEvents()
         inline.grab().save(str(report_path.with_suffix(f".auto-{number}.png")))

@@ -122,7 +122,7 @@ class AutoInlineOverlay(SubtitleOverlay):
 
     @staticmethod
     def _block_key(block):
-        return block.kind, block.identity, block.target, block.order, block.caption_mode
+        return block.kind, block.identity, block.target, block.order, block.caption_mode, block.viewport
 
     def reset_presentation(self):
         self._presentations.clear()
@@ -133,9 +133,11 @@ class AutoInlineOverlay(SubtitleOverlay):
     def _valid_geometry(self, block):
         x,y,w,h = block.bounds
         fw,fh = self.frame_size
+        vx,vy,vw,vh=block.viewport or (0,0,fw,fh)
         return (all(math.isfinite(v) for v in (x,y,w,h)) and x>=0 and y>=0
                 and w>0 and h>0 and x+w<=fw and y+h<=fh
-                and (block.kind!='dialogue' or y>=fh*(.72 if block.caption_mode=='walking' else .78)))
+                and (block.kind!='dialogue' or (x>=vx and x+w<=vx+vw and y+h<=vy+vh
+                     and y>=vy+vh*(.72 if block.caption_mode=='walking' else .78))))
 
     def _mask_rect(self, block):
         state = self._presentations.get(self._block_key(block))
@@ -152,27 +154,29 @@ class AutoInlineOverlay(SubtitleOverlay):
         and Vietnamese lines, never the entire game's caption viewport.
         """
         fw, fh = self.frame_size
+        vx,vy,vw,vh=block.viewport or (0,0,fw,fh)
         x, y, width, height = block.bounds
         walking = block.caption_mode == 'walking'
         minimum_top = .72 if walking else .78
         if (not all(math.isfinite(v) for v in (x,y,width,height)) or width <= 0 or height <= 0
-                or x < 0 or y < fh*minimum_top or x+width > fw or y+height > fh):
+                or x < vx or y < vy+vh*minimum_top or x+width > vx+vw or y+height > vy+vh):
             return None
         sx, sy = self.width()/fw, self.height()/fh
         scale = fh/1080
         # WuWa lays out the complete sentence around the game-frame center
         # before revealing its glyphs. Mirror genuine ink's outermost reach,
         # rather than centering on a short, left-hand typewriter fragment.
-        half_width = min(fw/2, max(fw/2-x, x+width-fw/2) + 10*scale)
-        left, right = fw/2-half_width, fw/2+half_width
+        midpoint=vx+vw/2
+        half_width = min(vw/2, max(midpoint-x, x+width-midpoint) + 10*scale)
+        left, right = midpoint-half_width, midpoint+half_width
         top = y
         bottom = max(y+height+4*scale, y+32*scale+4*scale)
-        limit_bottom = fh*(.815 if walking else .925)  # Keep the HUD/advance marker untouched.
+        limit_bottom = vy+vh*(.815 if walking else .925)  # Keep HUD/advance marker untouched.
         if bottom > limit_bottom+1:
             return None
         preferred = QRectF(left*sx, top*sy, (right-left)*sx, (bottom-top)*sy)
-        center = fw/2*sx
-        maximum = max(preferred.width(), fw*.90*sx)
+        center = midpoint*sx
+        maximum = max(preferred.width(), vw*.90*sx)
         base = max(1, round(float(self.auto_settings['font_size'])*scale*sy))
         padding = max(3.0, 4*scale*sx)
 

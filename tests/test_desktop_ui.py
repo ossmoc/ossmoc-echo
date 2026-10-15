@@ -17,6 +17,23 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.parametrize('dpr',[1,1.25,1.5,2])
+def test_letterbox_dialogue_layout_uses_client_pixels_and_fixed_font(app,dpr):
+    from ludiglot.ui.auto_overlay import AutoInlineOverlay
+    from ludiglot.core.auto_wuwa import AutoTextBlock
+    widget=AutoInlineOverlay()
+    widget.frame_size=(1920,1080)
+    widget.resize(round(1920/dpr),round(1080/dpr))
+    block=AutoTextBlock('dialogue',(500,803,920,50),'English','Bản dịch được xác nhận.',
+                        ('lang_multi_text.db','Main_1'),viewport=(0,135,1920,810))
+    assert widget._valid_geometry(block)
+    rect,font=widget._dialogue_layout(block)
+    assert abs(rect.center().x()-960/dpr)<1
+    assert rect.top()>=803/dpr-1 and rect.bottom()<=(135+810*.925)/dpr+1
+    assert font.pixelSize()==round(float(widget.auto_settings['font_size'])/dpr)
+    widget.close()
+
+
 class FakeController(QObject):
     status_changed=pyqtSignal(str); regions_changed=pyqtSignal(); data_changed=pyqtSignal()
     history_changed=pyqtSignal(); log_message=pyqtSignal(str)

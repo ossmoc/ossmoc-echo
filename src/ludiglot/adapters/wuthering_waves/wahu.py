@@ -40,6 +40,7 @@ class WahuTranslationProvider:
         self._source_english: dict[tuple[str, str], str] = {}
         self._source_speakers: dict[tuple[str, str], str] = {}
         self._source_moves: dict[tuple[str, str], tuple[str, str, tuple[str, str]]] = {}
+        self._release_source_proofs = {}
 
     def load_exact_translations(self) -> dict[tuple[str, str], str]:
         if not self.database_path.is_file():
@@ -75,6 +76,20 @@ class WahuTranslationProvider:
                 self._source_english[identity] = str(english or "")
                 self._source_speakers[identity] = str(speaker or "")
             self._source_moves = self._load_source_moves(connection, translations)
+            self._release_source_proofs = {}
+            proof_columns={r[1] for r in connection.execute('PRAGMA table_info(release_source_proofs)')}
+            if {'dbfile','key','source_dbfile','tbl','version','en','cn','vi'}<=proof_columns:
+                for dbfile,key,source,table,version,en,cn,vi in connection.execute('SELECT dbfile,key,source_dbfile,tbl,version,en,cn,vi FROM release_source_proofs'):
+                    identity=(str(dbfile).casefold(),str(key))
+                    if (source in {'lang_multi_text_1sthalf.db','lang_multi_text_2ndhalf.db'}
+                            and identity[0]=='lang_multi_text.db' and table=='MultiText'
+                            and re.fullmatch(r'\d+\.\d+',str(version))
+                            and en and cn and '*' not in en and '*' not in cn
+                            and _source_text(translations.get(identity,''))==_source_text(str(vi))
+                            and _source_text(self._source_english.get(identity,''))==_source_text(str(en))):
+                        self._release_source_proofs[identity]=(str(cn),table,source)
+                    else:
+                        translations.pop(identity,None)
             for identity, (english, vietnamese, origin) in self._source_moves.items():
                 translations[identity] = vietnamese
                 self._source_english[identity] = english
@@ -209,7 +224,7 @@ class WahuTranslationProvider:
                 if (translations.get(exact_identity) and self._source_english.get(exact_identity)
                         and _source_text(self._source_english[exact_identity]) == _source_text(english)):
                     match['verified_speaker'] = self._source_speakers.get(exact_identity, '')
-                if source_moves_only and exact_identity not in self._source_moves:
+                if source_moves_only and exact_identity not in self._source_moves and exact_identity not in self._release_source_proofs:
                     continue
                 vietnamese = translations.get(exact_identity, "")
                 english = str(match.get("official_en") or "")
@@ -220,9 +235,13 @@ class WahuTranslationProvider:
                     counted.add(count_identity)
                     official_entries += 1
                 source_english = self._source_english.get(exact_identity, "")
+                proof=self._release_source_proofs.get(exact_identity)
+                original_chinese=str(match.get('official_zh') or (match.get('official_cn') if not match.get('translation_source') else '') or '')
                 if vietnamese and (
                     (source_english and _source_text(source_english) != _source_text(english))
                     or (self.require_source_english and not source_english)
+                    or (proof and (not original_chinese or _source_text(original_chinese)!=_source_text(proof[0])
+                                   or (source_table and source_table!=proof[1])))
                 ):
                     vietnamese = ""
                     incompatible_source_entries += int(count_entry)
@@ -238,11 +257,12 @@ class WahuTranslationProvider:
                     vietnamese_matches += int(count_entry)
                     match["official_vi"] = vietnamese
                     match["official_cn"] = vietnamese
-                    moved = exact_identity in self._source_moves
+                    moved = exact_identity in self._source_moves or proof is not None
                     match["translation_source"] = "wahu_verified_source_move" if moved else "wahu_exact_id_reviewed"
                     if moved:
                         verified_source_moves += int(count_entry)
-                        match["translation_origin"] = list(self._source_moves[exact_identity][2])
+                        match["translation_origin"] = ([proof[2],text_key] if proof
+                                                       else list(self._source_moves[exact_identity][2]))
                 elif english:
                     english_fallbacks += int(count_entry)
                     match["official_vi"] = ""

@@ -62,6 +62,7 @@ class AutoTextBlock:
     partial: bool = False
     caption_mode: str = 'cinematic'
     target_template: str = ""
+    viewport: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -710,6 +711,8 @@ class AutoWuwaProcessor:
         self._next_information = 0.0
         self.last_timings = {}
         self.poll_interval_ms = 350
+        from ludiglot.core.content_viewport import ViewportTracker
+        self._viewport_tracker = ViewportTracker()
 
     def _recognize_geometry(self, engine, crop, backend):
         started = time.perf_counter()
@@ -904,7 +907,23 @@ class AutoWuwaProcessor:
         self.last_timings = {'windows_ocr_ms':0.0, 'cpu_ocr_ms':0.0, 'lookup_ms':0.0,
                              'windows_calls':0, 'contrast_calls':0, 'cpu_calls':0}
         try:
-            return self._process_frame(image, engine, settings, backend, force=force)
+            if isinstance(image, tuple) and len(image)==3:
+                from PIL import Image
+                raw,width,height=image
+                image=Image.frombytes('RGB',(width,height),raw,'raw','BGRX')
+            viewport=self._viewport_tracker.update(image)
+            x,y,w,h=viewport
+            settings={**settings,'bounds':(settings.get('bounds'),viewport)}
+            view=image if viewport==(0,0,*image.size) else image.crop((x,y,x+w,y+h))
+            result=self._process_frame(view,engine,settings,backend,force=force)
+            if view is image:
+                return result
+            # Retrieval/stabilization stay viewport-local. Only the returned
+            # rectangles are mapped back to physical client pixels; native
+            # capture bounds/screenshots remain the complete selected window.
+            return replace(result,blocks=tuple(replace(b,
+                bounds=(b.bounds[0]+x,b.bounds[1]+y,*b.bounds[2:]),viewport=viewport)
+                for b in result.blocks))
         finally:
             self.last_timings['process_ms'] = 1000*(time.perf_counter()-started)
 

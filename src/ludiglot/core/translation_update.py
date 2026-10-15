@@ -32,6 +32,7 @@ RELEASE_API = "https://api.github.com/repos/WahuVN/Viet-Hoa-WuWa/releases/latest
 _DOWNLOAD_ROOT = "https://github.com/WahuVN/Viet-Hoa-WuWa/releases/download/"
 _TAG_RE = re.compile(r"^v\d+(?:\.\d+){1,3}$")
 _SHA_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+SOURCE_BUILD_REVISION = 3
 Progress = Callable[[str], None]
 
 
@@ -59,6 +60,9 @@ def translation_update_status(release: ReleaseInfo, installed: Mapping[str, Any]
         current = any(a.name in database_archive_names(release.tag) and a.sha256 and
                       hashes.get(a.name) == a.sha256 for a in release.assets)
     if current:
+        if (local==remote and installed.get('database_name_mode')=='packaged_seed'
+                and installed.get('source_build_revision')!=SOURCE_BUILD_REVISION):
+            return True, 'Có bản sửa cách ghép dữ liệu; cập nhật lại bản dịch.'
         game = installed.get("translation_game_version") or release.game_version or extract_game_version(release.body)
         return False, f"Đã là bản mới nhất Wuthering Waves {game or '(chưa rõ phiên bản)'}"
     return True, "Có bản cập nhật mới"
@@ -249,6 +253,7 @@ class TranslationUpdater:
                 "release_tag": release.tag, "release": release.to_dict(), "variant": "en",
                 "hashes": hashes, "translation_game_version": release.game_version,
                 "source_kind": "wahu_release", "database_name_mode": mode,
+                "source_build_revision": SOURCE_BUILD_REVISION if mode=='packaged_seed' else None,
                 "canonical_en_path": str(generation / "canonical") if canonical is not None else None,
             }
             result = self._merge_and_activate(generation, database, official_cache, metadata, canonical, progress, cancel)
