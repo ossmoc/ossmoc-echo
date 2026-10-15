@@ -368,6 +368,15 @@ class DocumentReader(QDialog):
             self.setGeometry(*rect)
             self._applying_geometry = False
             self.font_size.setValue(int(settings.get("reader_font_size", 22)))
+        # A saved player name can change while this same document is open.
+        # Refresh its text without resetting geometry, scroll or dismissal.
+        title = document.title + (" — phần đã xác nhận" if document.partial else "")
+        if self.title_label.text() != title:
+            self.title_label.setText(title)
+        if self.text.toPlainText() != document.target:
+            position = self.text.verticalScrollBar().value()
+            self.text.setPlainText(document.target)
+            self.text.verticalScrollBar().setValue(position)
         if hidden or self.dismissed_id == document.identity:
             self.hide()
         else:

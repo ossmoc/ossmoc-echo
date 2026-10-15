@@ -281,10 +281,18 @@ def _equivalent_english(old: str, current: str, aliases: Mapping[str, str]) -> b
         # Only unambiguous expansions; 's / 'd in general could mean is/has or
         # had/would and must not be guessed. Preserve negation and all nouns.
         for contraction, expanded in (("I'm", 'I am'), ("won't", 'will not'),
-                ("can't", 'cannot'), ("Whoever's playing", 'Whoever is playing')):
-            text = re.sub(r'\b'+re.escape(contraction)+r'\b', expanded, text)
+                ("can't", 'cannot'), ("Whoever's playing", 'Whoever is playing'),
+                ("isn't", 'is not'), ("aren't", 'are not'), ("wasn't", 'was not'),
+                ("weren't", 'were not'), ("don't", 'do not'), ("doesn't", 'does not'),
+                ("didn't", 'did not'), ("haven't", 'have not'), ("hasn't", 'has not'),
+                ("hadn't", 'had not'), ("couldn't", 'could not'), ("wouldn't", 'would not'),
+                ("shouldn't", 'should not'), ("mustn't", 'must not'), ("needn't", 'need not')):
+            def expand(match):
+                return expanded[0].upper()+expanded[1:] if match[0][0].isupper() else expanded
+            text = re.sub(r'\b'+re.escape(contraction)+r'\b', expand, text, flags=re.I)
         text = re.sub(r"\b(I|you|we|they|he|she|it)'ll\b", r'\1 will', text, flags=re.I)
         text = re.sub(r"\b(you|we|they)'re\b", r'\1 are', text, flags=re.I)
+        text = re.sub(r"\b(I|you|we|they)'ve\b", r'\1 have', text, flags=re.I)
         text = re.sub(r"\b(I|you|we|they|he|she|it) would've\b", r'\1 would have', text, flags=re.I)
         text = re.sub(r'\bGot it in my head\b', 'Got it into my head', text)
         if aliases and not text.isascii():

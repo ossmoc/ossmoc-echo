@@ -139,7 +139,10 @@ class WindowCapture:
             else:
                 factory = self._factory
             capture = factory(window_hwnd=target.hwnd, monitor_index=None, cursor_capture=False,
-                              draw_border=False, minimum_update_interval=100)
+                              draw_border=None, minimum_update_interval=None)
+            # None preserves OS defaults instead of invoking optional WGC session
+            # properties (border/update interval are unsupported on older Windows).
+            # OCR polling remains throttled by the application scheduler.
             def on_frame_arrived(frame, control):
                 # The native buffer is valid only in this callback; own the copy.
                 image = Image.frombytes("RGB", (frame.width, frame.height), frame.frame_buffer.tobytes(), "raw", "BGRX")

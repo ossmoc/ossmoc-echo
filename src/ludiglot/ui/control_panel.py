@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QSpinBox,
+    QListWidgetItem, QLineEdit, QMainWindow, QPushButton, QScrollArea, QSpinBox,
     QStackedWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget, QFontComboBox)
 from ludiglot.core.desktop_models import AUTO_DEFAULTS, HOTKEY_DEFAULTS
 from ludiglot.core.story_catalog import dialogue_scene, story_label
@@ -124,6 +124,16 @@ class ControlPanel(QMainWindow):
         row.addWidget(self.capture_source_label,1)
         self.connect_button = self._button('Chọn game','choose_game_window'); row.addWidget(self.connect_button); layout.addLayout(row)
         layout.addWidget(self._label('Chỉ đọc cửa sổ game đã chọn.',muted=True))
+        layout.addWidget(self._label('Tên nhân vật của bạn'))
+        row = QHBoxLayout()
+        self.player_name_edit = QLineEdit(); self.player_name_edit.setMaxLength(40)
+        self.player_name_edit.setPlaceholderText('Nhập tên nhân vật trong game')
+        self.player_name_edit.setToolTip('Thay mã tên nhân vật trong bản dịch. Để trống: dùng tên nhận diện được, nếu không có thì dùng Rover.')
+        row.addWidget(self.player_name_edit, 1)
+        self.save_player_name_button = QPushButton('Lưu tên')
+        self.save_player_name_button.clicked.connect(self._save_player_name)
+        self.player_name_edit.returnPressed.connect(self._save_player_name)
+        row.addWidget(self.save_player_name_button); layout.addLayout(row)
         self.missing_data_note = self._label(MISSING_ENGLISH_DATA,muted=True)
         layout.addWidget(self.missing_data_note)
         self._heading(layout,'02  Bắt đầu dịch')
@@ -243,6 +253,13 @@ class ControlPanel(QMainWindow):
         family=str(settings['font_family']).replace("'",'').replace('"','')
         self.style_preview.setStyleSheet(f'font-family: "{family}"; font-size: {font.pixelSize()}px; color: {settings["text_color"]}; background: rgba({color.red()},{color.green()},{color.blue()},{round(int(settings["background_opacity"])*2.55)}); border-radius: 8px; padding: 12px;')
 
+    def _save_player_name(self):
+        from ludiglot.core.player_names import normalize_player_name
+        name = normalize_player_name(self.player_name_edit.text())
+        self._invoke('update_auto_settings', player_name=name)
+        self.player_name_edit.setText(self.controller.raw.get('auto_wuwa', {}).get('player_name', ''))
+        self.player_name_edit.setModified(False)
+
     def _story_changed(self):
         if not self._refreshing:
             self._invoke('choose_story',self.story_combo.currentData() or '')
@@ -250,6 +267,9 @@ class ControlPanel(QMainWindow):
     def refresh_data(self):
         self._refreshing=True
         auto = {**AUTO_DEFAULTS,**self.controller.raw.get('auto_wuwa',{})}
+        # Context/status refreshes must not erase a name being edited.
+        if not self.player_name_edit.isModified():
+            self.player_name_edit.setText(auto.get('player_name', ''))
         capture = self.controller.raw.get('window_capture',{})
         connected = capture.get('mode')=='window' and bool(capture.get('target'))
         self.capture_source_label.setText('Wuthering Waves · đã chọn' if connected else 'Chưa chọn game.')

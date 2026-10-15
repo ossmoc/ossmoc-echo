@@ -91,3 +91,44 @@ def test_closed_window_never_reuses_last_frame():
     with pytest.raises(CaptureUnavailable):
         capture.image(0)
     capture.close()
+
+
+def test_older_windows_uses_default_optional_session_properties():
+    class OlderWindowsNative(Native):
+        def start_free_threaded(self):
+            if self.kwargs.get("draw_border") is not None:
+                raise RuntimeError("Toggling the capture border is not supported by the Graphics Capture API on this platform.")
+            if self.kwargs.get("minimum_update_interval") is not None:
+                raise RuntimeError("Minimum update interval is not supported on this platform.")
+            return self
+
+    capture = WindowCapture(factory=OlderWindowsNative,
+                            geometry=lambda _: ({"left":300,"top":100,"width":100,"height":60}, []))
+    capture.bind(SimpleNamespace(hwnd=123))
+    native = OlderWindowsNative.instances[-1]
+    assert native.kwargs["window_hwnd"] == 123
+    assert native.kwargs["monitor_index"] is None
+    assert native.kwargs["cursor_capture"] is False
+    native.frame((1,2,3))
+    assert capture.image(0).getpixel((0,0)) == (1,2,3)
+    capture.close()
+    assert native.stopped
+
+
+def test_native_start_error_is_not_hidden_or_retried_as_desktop_capture():
+    attempts = []
+
+    class DeniedNative(Native):
+        def start_free_threaded(self):
+            attempts.append(self.kwargs)
+            raise RuntimeError("Access denied")
+
+    capture = WindowCapture(factory=DeniedNative)
+    with pytest.raises(RuntimeError, match="Access denied"):
+        capture.bind(SimpleNamespace(hwnd=123))
+    assert len(attempts) == 1
+    assert attempts[0]["window_hwnd"] == 123
+    assert attempts[0]["monitor_index"] is None
+    assert capture.target is None
+    with pytest.raises(CaptureUnavailable):
+        capture.image(0)

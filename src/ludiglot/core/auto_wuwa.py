@@ -18,6 +18,9 @@ from typing import Any
 
 from rapidfuzz import fuzz, process
 from ludiglot.core.story_catalog import dialogue_scene, story_catalog
+from ludiglot.core.player_names import normalize_player_name, replace_player_name
+from ludiglot.core.context_match import (choose_forward, critical_words, evidence_words,
+    has_close_forward_competitor, has_forward_word_evidence, observed_conflict)
 
 
 SEARCH_BANDS = {
@@ -44,6 +47,7 @@ class VerifiedText:
     vietnamese: str
     partial: bool = False
     speaker: str = ""
+    target_template: str = ""
 
 
 
@@ -57,6 +61,7 @@ class AutoTextBlock:
     order: int = 0
     partial: bool = False
     caption_mode: str = 'cinematic'
+    target_template: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,21 @@ class AutoFrameResult:
     observed_texts: tuple[tuple[str, str], ...] = ()
     # Positive glyph evidence from the last verified dialogue, not OCR guesses.
     stable_kinds: tuple[str, ...] = ()
+    pending_kinds: tuple[str, ...] = ()
+
+
+def personalize_frame(frame: AutoFrameResult, player_name: str = '') -> AutoFrameResult:
+    """Render a copy, retaining raw templates for name changes and cache safety."""
+    configured = normalize_player_name(player_name)
+    name = configured or 'Rover'
+    blocks = tuple(replace(block, target=replace_player_name(
+        block.target_template if configured and block.target_template else block.target, name))
+        for block in frame.blocks)
+    document = frame.document
+    if document:
+        document = replace(document, title=replace_player_name(document.title, name),
+                           target=replace_player_name(document.target, name))
+    return replace(frame, blocks=blocks, document=document)
 
 
 class AutoTextIndex:
@@ -91,9 +111,12 @@ class AutoTextIndex:
         self.documents: dict[tuple[str, str], tuple[VerifiedText, VerifiedText]] = {}
         self.glossaries: dict[tuple[str, str], tuple[VerifiedText, VerifiedText]] = {}
         self.context_hint = ""
+        self._context_observed = False
         self.story_group = ""
         self._scope_signature = None
         self._scope_keys: tuple[str, ...] = ()
+        self._forward_cache_hint = None
+        self._forward_cache: tuple[VerifiedText, ...] = ()
         self._templates: list[VerifiedText] = []
         self.speaker_names = set()
         records: dict[tuple[str, str], VerifiedText] = {}
@@ -115,6 +138,8 @@ class AutoTextIndex:
                     continue
                 vi = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", vi, flags=re.I)))
                 vi = vi.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+                # Normalize token spelling only; preserve all literal words.
+                en = replace_player_name(en, '{PlayerName}')
                 record = VerifiedText(identity, en, vi, speaker=str(item.get('verified_speaker') or ''))
                 if identity in records and records[identity] != record:
                     ambiguous.add(identity)
@@ -208,9 +233,10 @@ class AutoTextIndex:
             self.set_context(hint)
         return True
 
-    def set_context(self, key: str = "") -> bool:
+    def set_context(self, key: str = "", *, observed: bool = False) -> bool:
         """Prioritize existing nearby scene records, never synthesize next IDs."""
         if self.context_hint == key:
+            self._context_observed = self._context_observed or (observed and bool(key))
             return True
         if not self.valid_context(key):
             return False
@@ -220,6 +246,7 @@ class AutoTextIndex:
         if key and (not scene or len(families) != 1):
             return False
         self.context_hint = key
+        self._context_observed = observed and bool(key)
         signature = ((next(iter(families)), scene[0], scene[1], self.story_group) if scene
                      else ('group',self.story_group) if self.story_group else None)
         if signature == self._scope_signature:
@@ -264,26 +291,29 @@ class AutoTextIndex:
             found = pattern.fullmatch(source.strip())
             if found and "{" not in found['player']:
                 matches.append(replace(record,
-                    vietnamese=record.vietnamese.replace("{PlayerName}", found['player'].strip())))
+                    target_template=record.vietnamese,
+                    vietnamese=replace_player_name(record.vietnamese, found['player'].strip())))
         return self._unique(matches) or self._unique(self._scoped(matches))
 
     def resolve(self, source: str, kind: str, *, remember: bool = True) -> VerifiedText | None:
         query = normalized(source)
-        short_dialogue = kind == 'dialogue' and (len(query) < 24 or len(query.split()) < 4)
         # Scene scope does not change for adjacent lines, but the forward
-        # window does. Never reuse a short-answer decision from an old anchor.
-        token = (query, kind, source if self._templates else "", self._scope_signature,
-                 self.context_hint if short_dialogue else None)
+        # window does. Sparse matches also depend on the full line anchor and
+        # punctuation (e.g. 3.7 versus 3 7); keep those in the memo key.
+        token = (query, kind, source if kind == 'dialogue' or self._templates else "", self._scope_signature,
+                 (self.context_hint, self._context_observed) if kind == 'dialogue' else None)
         if token in self._memo:
             found = self._memo[token]
             if remember and found and kind in {'dialogue','choices'}:
-                self.set_context(found.identity[1])
+                self.set_context(found.identity[1], observed=True)
             return found
         # An exact sentence elsewhere always wins over a stale scene hint.
         # Otherwise try distinctive scene excerpts before a global fuzzy scan.
         found = self._resolve(query, kind, exact_only=True)
         if not found and query not in self.exact:
             found = self._player_template(source,kind)
+        if not found and kind == 'dialogue' and query not in self.exact:
+            found = self._resolve_forward_words(source)
         if not found and query not in self.exact:
             excerpt = self._resolve_fragment(query, kind) or self._resolve_clipped(query, kind)
             # A unique excerpt must not outrank an almost-complete, stronger
@@ -293,8 +323,22 @@ class AutoTextIndex:
                 found = excerpt
             else:
                 found = self._resolve(query, kind) or excerpt
+        if (found and kind == 'dialogue' and not found.target_template
+                and observed_conflict(source, found.english)):
+            found = None
+        if found and kind == 'dialogue' and query not in self.exact and not found.target_template:
+            # Old fuzzy/fragment paths must not bypass explicit critical-word
+            # conflicts or a newly detected close forward branch.
+            forward = self._forward_window()
+            position = next((n for n, r in enumerate(forward) if r.identity == found.identity), None)
+            critical_mismatch = (not found.partial and not found.target_template
+                and critical_words(evidence_words(source)) != critical_words(evidence_words(found.english)))
+            if (observed_conflict(source, found.english) or critical_mismatch
+                    or (position is not None and has_close_forward_competitor(
+                        source, position, [r.english for r in forward]))):
+                found = None
         if remember and found and kind in {"dialogue", "choices"}:
-            self.set_context(found.identity[1])
+            self.set_context(found.identity[1], observed=True)
         if len(self._memo) > 1000:
             self._memo.clear()
         self._memo[token] = found
@@ -342,20 +386,21 @@ class AutoTextIndex:
             return None
         return matches[0] if matches else None
 
-    def _resolve_short_dialogue(self, query: str) -> VerifiedText | None:
-        """Use visible exact text in a narrow forward window of real records.
+    def _forward_window(self) -> tuple[VerifiedText, ...]:
+        """Current + at most six existing records, never a generated next ID.
 
-        Numbering supplies candidate context, not a flow graph. Branches with
-        the same short English remain ambiguous. No fuzzy spelling recovery or
-        invented next ID is allowed, and an unrelated story selection alone
-        cannot authorize a two-word line.
+        Keep both the numeric-gap and record-count bounds. Only the anchor's
+        source/group, current scene and the immediately next scene qualify.
+        A broad chapter selection is not a line anchor or a branch flow graph.
         """
-        if len(query) < 2 or not self.context_hint:
-            return None
+        if not self.context_hint:
+            return ()
+        if self.context_hint == self._forward_cache_hint:
+            return self._forward_cache
         hint = dialogue_scene(self.context_hint)
         anchors = self._by_id.get(self.context_hint, [])
         if not hint or len(anchors) != 1:
-            return None
+            return ()
         anchor = anchors[0]
         nearby = []
         for number in (hint[1], hint[1] + 1):
@@ -371,8 +416,41 @@ class AutoTextIndex:
         nearby.sort(key=lambda item: (item[0], item[2].identity))
         current = [item for item in nearby if item[2].identity == anchor.identity]
         future = [item for item in nearby if item[2].identity != anchor.identity][:6]
-        matches = {record.identity: record for _, norm, record in current + future if norm == query}
+        self._forward_cache_hint = self.context_hint
+        self._forward_cache = tuple(record for _, _, record in current + future)
+        return self._forward_cache
+
+    def _resolve_short_dialogue(self, query: str) -> VerifiedText | None:
+        """Short exact visible text; two-word typos are still not guessed."""
+        if len(query) < 2:
+            return None
+        matches = {record.identity: record for record in self._forward_window()
+                   if normalized(record.english) == query}
         return next(iter(matches.values())) if len(matches) == 1 else None
+
+    def _resolve_forward_words(self, source: str) -> VerifiedText | None:
+        if not self._context_observed:
+            return None  # A manually selected/saved ID is not fresh OCR proof.
+        records = self._forward_window()
+        chosen = choose_forward(source, [r.english for r in records])
+        if chosen is None:
+            return None
+        record = records[chosen]
+        query, target = normalized(source), normalized(record.english)
+        # Preserve the existing stronger-global-match and literal long-excerpt
+        # collision checks. A stale hint must not beat clearer visible text.
+        challenger = process.extractOne(query, self.keys, scorer=fuzz.ratio, score_cutoff=90)
+        if (challenger and challenger[0] != target
+                and challenger[1] >= fuzz.ratio(query, target)):
+            return None
+        if len(query.split()) >= 6 and any(other != target and
+                ' '+query+' ' in ' '+other+' ' for other in self.keys):
+            return None
+        return replace(record, partial=evidence_words(source) != evidence_words(record.english))
+
+    def forward_pending(self, source: str) -> bool:
+        return self._context_observed and has_forward_word_evidence(
+            source, [r.english for r in self._forward_window()])
 
     def _resolve_fragment(self, query, kind):
         """Exact distinctive fragment in known scene; never infer a successor.
@@ -522,19 +600,27 @@ def choice_border(image, bounds) -> bool:
     """Require a light vertical button border to the left of the text/icon."""
     x, y, width, height = bounds
     scale = image.width / 1920
-    rgb = image.convert("RGB")
+    import numpy as np
     top = max(0, round(y - 8 * scale)); bottom = min(image.height, round(y + height + 8 * scale))
-    for col in range(max(0, round(x - 85 * scale)), max(1, round(x - 18 * scale)), max(1, round(2 * scale))):
+    start = max(0, round(x - 85 * scale))
+    stop = min(image.width, max(1, round(x - 18 * scale)))
+    if start >= stop or top >= bottom:
+        return False
+    # Only the button neighborhood, not a 1920x1080 int16 copy per OCR line.
+    x0, y0 = start, max(0, round(y-20*scale))
+    right = min(image.width, max(x+width, stop+max(4,round(6*scale)))+1)
+    lower = min(image.height, max(bottom, round(y+height+22*scale)))
+    rgb = np.asarray(image.crop((x0,y0,right,lower)).convert('RGB')).astype('int16')
+    for col in range(start, stop, max(1, round(2 * scale))):
         # Unselected buttons have a gray border, not the selected white one.
         # Require a neutral edge with a darker interior, rather than lowering
         # brightness alone (which would admit scenery/HUD stripes).
-        count = 0
-        gray_count = 0
-        for row in range(top, bottom):
-            edge = rgb.getpixel((col, row))
-            inside = rgb.getpixel((min(image.width-1, col+max(4, round(6*scale))), row))
-            count += min(edge)>125 and max(edge)-min(edge)<50 and min(edge)-max(inside)>45
-            gray_count += min(edge)>85 and max(edge)-min(edge)<50 and min(edge)-max(inside)>18
+        edge = rgb[top-y0:bottom-y0,col-x0]
+        inside = rgb[top-y0:bottom-y0,min(image.width-1,col+max(4,round(6*scale)))-x0]
+        minimum, maximum = edge.min(axis=1), edge.max(axis=1)
+        difference = minimum-inside.max(axis=1)
+        count = np.count_nonzero((minimum>125)&(maximum-minimum<50)&(difference>45))
+        gray_count = np.count_nonzero((minimum>85)&(maximum-minimum<50)&(difference>18))
         if count >= (bottom - top) * .40:
             return True
         if gray_count >= (bottom - top) * .65:
@@ -545,9 +631,11 @@ def choice_border(image, bounds) -> bool:
             for yy in list(range(max(0,round(y-20*scale)),max(0,round(y-2*scale)))) + list(
                     range(min(image.height,round(y+height+2*scale)), min(image.height,round(y+height+22*scale)))):
                 inner_y = max(0, min(image.height-1, yy + (1 if yy < y else -1)*max(4,round(6*scale))))
-                values = [(rgb.getpixel((xx,yy)),rgb.getpixel((xx,inner_y))) for xx in xs]
-                if values and sum(min(v)>85 and max(v)-min(v)<50 and min(v)-max(inside)>18
-                                  for v,inside in values) >= len(values)*.55:
+                columns = list(xs)
+                values, inside = rgb[yy-y0,[xx-x0 for xx in columns]], rgb[inner_y-y0,[xx-x0 for xx in columns]]
+                if columns and np.count_nonzero((values.min(axis=1)>85)&
+                        (values.max(axis=1)-values.min(axis=1)<50)&
+                        (values.min(axis=1)-inside.max(axis=1)>18)) >= len(columns)*.55:
                     return True
     return False
 
@@ -559,12 +647,11 @@ def dialogue_chrome(image) -> bool:
     Unknown layouts without this cue deliberately remain untranslated.
     """
     sample = image.convert("RGB").resize((960, 540))
-    rows = 0
-    for y in range(round(540*.74), round(540*.795)):
-        gold = sum(r > 160 and g > 135 and b < 145 and r > b*1.25 and g > b*1.1
-                   for r, g, b in (sample.getpixel((x,y)) for x in range(336,624)))
-        rows += gold >= 8
-    return rows >= 7
+    import numpy as np
+    pixels = np.asarray(sample.crop((336,round(540*.74),624,round(540*.795)))).astype('int16')
+    r,g,b = pixels[:,:,0],pixels[:,:,1],pixels[:,:,2]
+    gold = (r>160)&(g>135)&(b<145)&(r>b*1.25)&(g>b*1.1)
+    return np.count_nonzero(np.count_nonzero(gold,axis=1)>=8)>=7
 
 
 def walking_chrome(image) -> bool:
@@ -622,6 +709,7 @@ class AutoWuwaProcessor:
         self._dialogue_visual = None
         self._next_information = 0.0
         self.last_timings = {}
+        self.poll_interval_ms = 350
 
     def _recognize_geometry(self, engine, crop, backend):
         started = time.perf_counter()
@@ -712,9 +800,13 @@ class AutoWuwaProcessor:
         previous = self._dialogue_visual[0] if self._dialogue_visual else ()
         caption_mode = (current or previous)[0].caption_mode if current or previous else 'cinematic'
         chrome = walking_chrome(image) if caption_mode == 'walking' else dialogue_chrome(image)
-        if result.document_present or 'glossary' in result.present_kinds or not chrome:
+        contradicted = not current and any(kind == 'dialogue' and
+            any(observed_conflict(text, block.source) for block in previous)
+            for kind, text in result.observed_texts)
+        if (result.document_present or 'glossary' in result.present_kinds or not chrome
+                or 'dialogue' in result.pending_kinds or contradicted):
             self._dialogue_visual = None
-            return result
+            return replace(result, stable_kinds=tuple(k for k in result.stable_kinds if k != 'dialogue'))
         if current:
             old = self._dialogue_visual
             if old and len(current)==len(old[0]):
@@ -754,16 +846,26 @@ class AutoWuwaProcessor:
             self._next_discovery = 0
         return result
 
-    def _fallback_dialogue(self, image, band, boxes):
+    def _fallback_dialogue(self, image, band, boxes, *, synchronous=False):
         crop=image.crop(band)
         output=[]
         started = time.perf_counter()
         try:
-            recognized = self.fallback.recognize(crop)
+            if not synchronous and hasattr(self.fallback, 'poll_or_submit'):
+                # Exact foreground-ink token rejects old work when even one
+                # glyph changes; moving scenery alone needn't invalidate it.
+                mask = self._glyph_mask(crop, (0,0,crop.width,crop.height))
+                token = (self._context, band, hashlib.blake2b(mask.tobytes(),digest_size=16).digest())
+                recognized = self.fallback.poll_or_submit(crop, token)
+                self.last_timings['fallback_pending'] = int(recognized is None)
+                if recognized is not None:
+                    self.last_timings['fallback_background_ms'] = self.fallback.last_completed_ms
+            else:
+                recognized = self.fallback.recognize(crop)
         finally:
             self.last_timings['cpu_ocr_ms'] = self.last_timings.get('cpu_ocr_ms', 0)+1000*(time.perf_counter()-started)
             self.last_timings['cpu_calls'] = self.last_timings.get('cpu_calls', 0)+1
-        for raw in recognized:
+        for raw in recognized or ():
             bounds=box_bounds(raw)
             if not bounds:
                 continue
@@ -818,6 +920,8 @@ class AutoWuwaProcessor:
         context = (image.size, settings.get("generation"), repr(settings.get("bounds")),
                    tuple(bool(settings.get(k, True)) for k in ("document", "glossary", "dialogue", "walking", "choices", "transition", "light_ocr")))
         if context != self._context:
+            if hasattr(self.fallback, 'cancel'):
+                self.fallback.cancel()
             self._context = context; self._next_discovery = 0; self._tracked.clear(); self._lost.clear(); self._ocr_cache.clear()
             self._dialogue_visual = None
             self._next_information = 0.0
@@ -837,6 +941,7 @@ class AutoWuwaProcessor:
         walking_confirmed = False
         walking_named = False
         speaker = cinematic or walking
+        self.poll_interval_ms = 100 if speaker else 350
         # During a known dialogue, expensive document discovery runs less
         # often. Losing the speaker immediately unlocks full discovery.
         information = force or 'document' in self._tracked or not (speaker and 'dialogue' in self._tracked) or now >= self._next_information
@@ -912,14 +1017,20 @@ class AutoWuwaProcessor:
                             # This optional contrast pass must not discard a
                             # successful primary capture or stop the scheduler.
                             pass
-                    if self.fallback and settings.get('light_ocr',True):
-                        resolved=[self._lookup(self.index.resolve,text,'dialogue') for text,_ in grouped_rows(boxes,paragraph=True)]
-                        if not any(resolved):
-                            try:
-                                boxes=self._fallback_dialogue(image,crop_rect,boxes)
-                            except Exception:
-                                pass
                 self._ocr_cache[kind] = (signature, boxes, now)
+            # Poll even on an unchanged crop: an async result may have arrived
+            # since the cached primary OCR miss. No matcher runs off-thread.
+            if kind in {'dialogue','walking_dialogue'} and backend == 'windows' and speaker and self.fallback and settings.get('light_ocr',True):
+                resolved=[self._lookup(self.index.resolve,text,'dialogue') for text,_ in grouped_rows(boxes,paragraph=True)]
+                if not any(resolved) and (force or hasattr(self.fallback, 'poll_or_submit')
+                        or not cached or cached[0] != signature):
+                    try:
+                        boxes=self._fallback_dialogue(image,crop_rect,boxes,synchronous=force)
+                        # Cache accepted geometry, not translations. Async misses
+                        # must still be polled; synchronous misses get one retry.
+                        self._ocr_cache[kind] = (signature, boxes, now)
+                    except Exception:
+                        pass
             observed[kind] = boxes
             if kind == 'walking_speaker':
                 walking_named = any(normalized(text) in self.index.speaker_names
@@ -967,7 +1078,7 @@ class AutoWuwaProcessor:
             return self._track(AutoFrameResult(document=document, document_present=True, detected_kinds=("document",), present_kinds=("document",), observed_texts=document_evidence), image)
         if document_present:
             diagnostics.append("Bảng thông tin chưa xác nhận được tiêu đề/nội dung; không che chữ gốc.")
-        blocks = []; detected = []; present = []; texts = []
+        blocks = []; detected = []; present = []; texts = []; pending = []
         for kind in ("choices", "dialogue", "transition"):
             if kind == "transition" and not black:
                 continue
@@ -992,13 +1103,19 @@ class AutoWuwaProcessor:
                     record = None
                 if record:
                     blocks.append(AutoTextBlock(kind, bounds, text, record.vietnamese, record.identity, order, record.partial,
-                                                'walking' if kind=='dialogue' and walking_confirmed else 'cinematic'))
+                                                'walking' if kind=='dialogue' and walking_confirmed else 'cinematic',
+                                                target_template=record.target_template))
                 else:
-                    diagnostics.append(f"{kind}: không có bản Việt khớp chắc chắn cho “{text[:90]}”.")
+                    if kind == 'dialogue' and self.index.forward_pending(text):
+                        pending.append(kind)
+                        diagnostics.append('dialogue: có từ khớp trong đoạn kế tiếp nhưng chưa đủ phân biệt; chờ thêm chữ.')
+                    else:
+                        diagnostics.append(f"{kind}: không có bản Việt khớp chắc chắn cho “{text[:90]}”.")
         anchors = [b for b in blocks if b.kind == 'dialogue'] or [b for b in blocks if b.kind == 'choices']
         if anchors:
             self.index.set_context(anchors[-1].identity[1])
-        return self._track(AutoFrameResult(tuple(blocks), document, document_present, tuple(diagnostics), tuple(sorted(set(detected))), tuple(sorted(set(present))), tuple(texts) + document_evidence), image)
+        return self._track(AutoFrameResult(tuple(blocks), document, document_present, tuple(diagnostics), tuple(sorted(set(detected))), tuple(sorted(set(present))), tuple(texts) + document_evidence,
+                                          pending_kinds=tuple(sorted(set(pending)))), image)
 
 
 class AutoPresenceTracker:
@@ -1022,13 +1139,16 @@ class AutoPresenceTracker:
             current = tuple(b for b in result.blocks if b.kind == kind)
             if current:
                 self.blocks[kind] = current; self.misses[kind] = 0
+            elif kind in result.pending_kinds:
+                self.blocks.pop(kind, None); self.misses[kind] = 0
             elif kind in result.stable_kinds:
                 self.misses[kind] = 0
             elif kind in result.present_kinds:
                 # A different unresolved sentence must not retain a previous
                 # translation. Only preserve if recognized text is unchanged.
                 old = self.blocks.get(kind, ())
-                same = old and all(any(k == kind and fuzz.ratio(normalized(block.source), normalized(text)) >= 85
+                same = old and all(any(k == kind and not observed_conflict(text, block.source)
+                                       and fuzz.ratio(normalized(block.source), normalized(text)) >= 85
                                        for k, text in result.observed_texts) for block in old)
                 if not same:
                     self.blocks.pop(kind, None)
@@ -1052,6 +1172,5 @@ class AutoPresenceTracker:
             self.document_misses += 1
             if self.document_misses >= 2:
                 self.document = None
-        return AutoFrameResult(tuple(b for group in self.blocks.values() for b in group), self.document,
-                               result.document_present or self.document is not None, result.diagnostics,
-                               result.detected_kinds, result.present_kinds, result.observed_texts, result.stable_kinds)
+        return replace(result, blocks=tuple(b for group in self.blocks.values() for b in group),
+                       document=self.document, document_present=result.document_present or self.document is not None)

@@ -109,7 +109,11 @@ def check_auto_windows(controller, report_path: Path, image_paths=()):
             picture=original.convert('RGB')
         cpu=AutoWuwaProcessor(controller.auto_processor.index, controller.auto_processor.fallback)
         cpu_frame=cpu.process(picture,EmptyWindowsOcr(),{**settings,'document':False,'choices':False,'transition':False},force=True)
-        result['cpu_fallback']={'ready':cpu.fallback.engine is not None,
+        provider = getattr(cpu.fallback, 'backend', cpu.fallback)
+        native_one = getattr(provider, 'one', None)
+        light = getattr(provider, 'light', provider)
+        result['cpu_fallback']={'ready':native_one is not None or getattr(light,'engine',None) is not None,
+            'backend':'OneOCR' if native_one is not None else 'LightDialogueOcr',
             'verified_dialogue':any(b.kind=='dialogue' and not b.partial for b in cpu_frame.blocks),
             'source_ids':[b.identity for b in cpu_frame.blocks]}
     for number, path in enumerate(image_paths, 1):

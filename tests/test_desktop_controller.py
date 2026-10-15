@@ -135,6 +135,18 @@ def envelope(controller, region_id="first", target="Xin chào", source="Hello", 
     return payload
 
 
+def test_player_name_is_persisted_without_pausing_or_resetting_context(controller):
+    from ludiglot.core.preferences import ConfigJsonStore
+    controller.raw['auto_wuwa']['context_hint'] = 'Main_Test_1_2'
+    controller._last_auto_frame = None
+    generation = controller.session.generation
+    controller.update_auto_settings(player_name='  Ossmoc\u202e  ')
+    assert controller.raw['auto_wuwa']['player_name'] == 'Ossmoc'
+    assert controller.raw['auto_wuwa']['context_hint'] == 'Main_Test_1_2'
+    assert controller.session.generation == generation
+    assert ConfigJsonStore(controller.paths.config_path).load_raw()['auto_wuwa']['player_name'] == 'Ossmoc'
+
+
 def pin(controller, region_id="special", target="Thông tin đặc biệt"):
     assert controller.session.request_scan(region_id)
     job = controller.session._pending.pop(("manual", region_id))
@@ -269,6 +281,28 @@ def test_dialogue_and_answer_overflow_never_open_top_box_even_if_already_visible
     assert fallback.blocks == [] and not fallback.visible
     controller_module.DesktopController._display_auto(panel, AutoFrameResult(blocks=(dialogue,)))
     assert fallback.blocks == [] and not fallback.visible
+
+
+def test_display_replaces_player_name_and_can_rerender_same_raw_frame():
+    from types import SimpleNamespace
+    from ludiglot.core.auto_wuwa import AutoFrameResult, AutoTextBlock
+    inline = SimpleNamespace(auto_blocks=(), capture_excluded=True, show=lambda: None,
+                             hide=lambda: None, isVisible=lambda: False)
+    inline.set_frame = lambda bounds, blocks, settings: setattr(inline, 'auto_blocks', blocks)
+    reader = SimpleNamespace(set_document=lambda *a, **k: None, isVisible=lambda: False)
+    fallback = SimpleNamespace(set_content=lambda _: None, hide=lambda: None, isVisible=lambda: False)
+    panel = SimpleNamespace(_last_capture_bounds={'left': 0, 'top': 0, 'width': 1920, 'height': 1080},
+        window_capture_mode=False, _background_hidden=False, overlay=SimpleNamespace(user_hidden=False),
+        auto_overlay=inline, auto_reader=reader, auto_fallback=fallback,
+        raw={'auto_wuwa': {'player_name': 'Ossmoc'}})
+    frame = AutoFrameResult((AutoTextBlock('dialogue', (450, 890, 1000, 32), 'Hello',
+        'Chào {player-name}', ('db', 'Main_1')),))
+    controller_module.DesktopController._display_auto(panel, frame)
+    assert inline.auto_blocks[0].target == 'Chào Ossmoc'
+    panel.raw['auto_wuwa']['player_name'] = 'Nguyễn A'
+    controller_module.DesktopController._display_auto(panel, frame)
+    assert inline.auto_blocks[0].target == 'Chào Nguyễn A'
+    assert frame.blocks[0].target == 'Chào {player-name}'
 
 
 def test_auto_frame_must_be_fully_inside_one_screen(controller):
@@ -532,12 +566,12 @@ def test_joint_check_keeps_app_result_when_translation_network_fails(controller,
     from types import SimpleNamespace
     from ludiglot.core.app_update import AppRelease
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.0.5', '', 10, '')
+    app_release = AppRelease('v1.1.1', '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.0.5' in controller.app_update_summary
+    assert controller.app_update_available and 'v1.1.1' in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 
@@ -585,6 +619,15 @@ def test_cached_warning_is_friendly_without_modifying_manifest(controller, monke
     assert 'khi bản dịch cung cấp' in controller.data_summary
     assert 'WAHU' not in controller.data_summary
     assert manifest['warnings'] == [warning]
+
+
+def test_abandoned_initialization_closes_its_private_ocr_helper(controller):
+    from types import SimpleNamespace
+    closed = []
+    processor = SimpleNamespace(fallback=SimpleNamespace(close=lambda:closed.append(True)))
+    controller._on_initialized({'token':controller._init_token-1, 'auto_processor':processor})
+    assert closed == [True]
+    assert controller.auto_processor is None
 
 
 def test_usage_guide_is_available_after_onboarding(controller, monkeypatch):
@@ -730,6 +773,24 @@ def test_accepted_auto_frame_remembers_context_but_never_unverified_text(control
     bad=AutoFrameResult(detected_kinds=('dialogue',),present_kinds=('dialogue',),observed_texts=(('dialogue','Unverified unrelated text'),))
     controller._on_result(envelope(controller,'__auto_wuwa__',result={'auto_frame':bad}))
     assert controller.store.load_raw()['auto_wuwa']['context_hint']==key
+
+
+def test_auto_history_and_preview_use_configured_name_without_mutating_raw_frame(controller, monkeypatch):
+    from ludiglot.core.auto_wuwa import AutoFrameResult, AutoTextBlock
+    controller.update_auto_settings(mode='auto', player_name='Ossmoc',
+        bounds={'left': 0, 'top': 0, 'width': 1920, 'height': 1080})
+    controller.session.resume()
+    monkeypatch.setattr(controller, '_display_auto', lambda _: None)
+    frame = AutoFrameResult((AutoTextBlock('dialogue', (450, 890, 1000, 32), 'Hello',
+        'Chào {player-name}', ('db', 'Main_Test_1_1')),), present_kinds=('dialogue',))
+    payload = envelope(controller, '__auto_wuwa__', result={'auto_frame': frame})
+    controller._on_result(payload)
+    assert controller.history[-1]['text'] == 'Chào Ossmoc'
+    assert controller._last_auto_frame.blocks[0].target == 'Chào {player-name}'
+    received = []
+    controller.preview_ready.connect(received.append)
+    controller._on_preview(payload)
+    assert received[0]['result']['matches'][0]['official_vi'] == 'Chào Ossmoc'
 
 
 def test_auto_timing_is_numeric_bounded_logging_and_not_ocr_or_screenshot_content(controller,monkeypatch):

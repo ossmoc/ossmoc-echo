@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Tuple, Any
 
 from ludiglot.core.voice_map import build_voice_map_from_configdb
+from ludiglot.core.player_names import PLAYER_NAME_PATTERN, replace_player_name
 
 
 
@@ -24,14 +25,11 @@ _GENDER_PLACEHOLDER_RE = re.compile(
     r"\{(?:Male=([^;]+);Female=([^}]+)|Female=([^;]+);Male=([^}]+))\}",
     re.IGNORECASE
 )
-_PLAYER_NAME_PLACEHOLDER_RE = re.compile(
-    r"\{PlayerName\}|\{Cus:Var,\s*VarType=Global\s+Key=main_team_name\}",
-    re.IGNORECASE,
-)
+_PLAYER_NAME_PLACEHOLDER_RE = PLAYER_NAME_PATTERN
 
 
 def expand_player_name_placeholder(text: str, player_name: str) -> str:
-    return _PLAYER_NAME_PLACEHOLDER_RE.sub(player_name, text)
+    return replace_player_name(text, player_name)
 
 
 def has_player_name_placeholder(text: str) -> bool:

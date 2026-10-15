@@ -27,6 +27,7 @@ from ludiglot.core.display_shaper import DisplayPreferences, shape_translation_d
 from ludiglot.core.matcher import TextMatcher
 from ludiglot.core.overlay_runtime import OverlayRuntimeCallbacks, create_overlay_ocr_engine
 from ludiglot.core.preferences import ConfigJsonStore, atomic_write_json
+from ludiglot.core.player_names import normalize_player_name
 from ludiglot.core.skill_param_resolver import SkillParamResolver
 from ludiglot.ui.desktop_session import DesktopCaptureSession, SessionCallbacks
 from ludiglot.ui.qt_capture_adapter import QtCaptureAdapter
@@ -34,7 +35,7 @@ from ludiglot.ui.hotkey_registrar import HotkeyBinding
 from ludiglot.ui.qt_hotkey_adapter import WindowsNativeHotkeyAdapter
 from ludiglot.ui.subtitle_overlay import SubtitleOverlay
 from ludiglot.ui.subtitle_overlay import SubtitleOverlay as AutoFallbackOverlay
-from ludiglot.core.auto_wuwa import AutoFrameResult, AutoPresenceTracker, AutoTextIndex, AutoWuwaProcessor
+from ludiglot.core.auto_wuwa import AutoFrameResult, AutoPresenceTracker, AutoTextIndex, AutoWuwaProcessor, personalize_frame
 from ludiglot.ui.auto_overlay import AutoInlineOverlay, DocumentReader, logical_frame
 
 
@@ -218,6 +219,7 @@ class DesktopController(QObject):
         self._clear_auto()
 
         def worker():
+            fallback = None
             try:
                 cfg = self._load_config()
                 if not cfg.db_path.is_file():
@@ -233,8 +235,10 @@ class DesktopController(QObject):
                         self.log_message.emit(f"Phục hồi {repaired.verified_source_moves:,} liên kết bản dịch từ lịch sử nguồn English/Chinese đã xác nhận (không sửa dữ liệu game).")
                     except (OSError, sqlite3.DatabaseError) as exc:
                         self.log_message.emit(f"Không phục hồi liên kết nguồn bản dịch; giữ cache đang dùng: {exc}")
-                from ludiglot.core.light_ocr import LightDialogueOcr
-                fallback = LightDialogueOcr(self.paths.resource_root/'models'/'light_ocr', self.log_message.emit)
+                from ludiglot.core.async_ocr import LatestOnlyOcr
+                from ludiglot.core.one_ocr import PreferredDialogueOcr
+                fallback = LatestOnlyOcr(PreferredDialogueOcr(self.paths.resource_root/'models'/'light_ocr',
+                    self.paths.data_root/'cache'/'oneocr', self.log_message.emit))
                 fallback.prepare_runtime()
                 engine = create_overlay_ocr_engine(cfg, OverlayRuntimeCallbacks(log=self.log_message.emit))
                 engine.initialize()
@@ -247,11 +251,16 @@ class DesktopController(QObject):
                 self._initialized.emit({"token": token, "config": cfg, "engine": engine, "matcher": matcher,
                     "params": params, "auto_processor": auto_processor, "count": len(db), "coverage": count_translation_coverage(db), "resume": resume_after})
             except Exception as exc:
+                if fallback is not None:
+                    fallback.close()
                 self._initialized.emit({"token": token, "error": str(exc)})
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_initialized(self, payload):
         if self._closed or payload["token"] != self._init_token:
+            abandoned = getattr(payload.get('auto_processor'), 'fallback', None)
+            if hasattr(abandoned, 'close'):
+                abandoned.close()
             return
         if "error" in payload:
             self._maintenance = False
@@ -261,7 +270,13 @@ class DesktopController(QObject):
             return
         self.config, self.engine, self.matcher = payload["config"], payload["engine"], payload["matcher"]
         self.param_resolver = payload["params"]
+        previous = getattr(self.auto_processor, 'fallback', None)
+        if hasattr(previous, 'close'):
+            previous.close()
         self.auto_processor = payload.get("auto_processor")
+        fallback = getattr(self.auto_processor, 'fallback', None)
+        if hasattr(fallback, 'set_wakeup'):
+            fallback.set_wakeup(self.session.wake_auto)
         self.capture_adapter.config = self.config
         self.ready = True
         self._maintenance = False
@@ -434,6 +449,8 @@ class DesktopController(QObject):
         if "mode" in allowed and allowed["mode"] not in ("regions", "auto"):
             return
         settings = {**self.raw["auto_wuwa"], **allowed}
+        if 'player_name' in allowed:
+            settings['player_name'] = normalize_player_name(allowed['player_name'])
         for key in ("font_size", "choice_font_size", "reader_font_size", "outline_width", "background_opacity"):
             if key in allowed:
                 low, high = (0, 100) if key == "background_opacity" else (0, 8) if key == "outline_width" else (14, 64)
@@ -595,6 +612,7 @@ class DesktopController(QObject):
         return True
 
     def _display_auto(self, frame):
+        frame = personalize_frame(frame, self.raw['auto_wuwa'].get('player_name', ''))
         bounds = self._last_capture_bounds or self._game_bounds()
         if not bounds:
             return
@@ -926,6 +944,8 @@ class DesktopController(QObject):
             frame = self.auto_tracker.update(frame)
             self._last_auto_frame = frame
             self._display_auto(frame)
+            # History/copy share the rendered text, never expose raw name tokens.
+            frame = personalize_frame(frame, self.raw['auto_wuwa'].get('player_name', ''))
             timing = (payload.get('result') or {}).get('timings')
             if timing:
                 ui_ms = 1000*(time.perf_counter()-submitted)
@@ -937,7 +957,7 @@ class DesktopController(QObject):
                 if submitted >= getattr(self, '_next_timing_log', 0):
                     self._next_timing_log = submitted+5
                     self.log_message.emit('[Auto timing] '+ ' '.join(f'{k}={self.last_auto_timings.get(k,0):.1f}'
-                        for k in ('capture_ms','windows_ocr_ms','cpu_ocr_ms','lookup_ms','queue_ms','ui_submit_ms','capture_to_submit_ms')))
+                        for k in ('capture_ms','windows_ocr_ms','cpu_ocr_ms','fallback_pending','fallback_background_ms','lookup_ms','queue_ms','ui_submit_ms','capture_to_submit_ms')))
             accepted = [b for b in frame.blocks if b.kind in {"dialogue", "choices"}]
             if accepted:
                 import re
@@ -979,6 +999,7 @@ class DesktopController(QObject):
             if payload.get("region_id") == "__auto_wuwa__":
                 frame = (payload.get("result") or {}).get("auto_frame")
                 if isinstance(frame, AutoFrameResult):
+                    frame = personalize_frame(frame, self.raw['auto_wuwa'].get('player_name', ''))
                     matches = [{"official_en": b.source, "official_vi": b.target, "text_key": b.identity[1]} for b in frame.blocks]
                     if frame.document:
                         matches.append({"official_en": "Tài liệu đã xác nhận", "official_vi": frame.document.target, "text_key": frame.document.identity[1]})
@@ -1627,6 +1648,9 @@ class DesktopController(QObject):
         self._job_cancel.set()
         self.environment_timer.stop()
         self.session.close()
+        fallback = getattr(self.auto_processor, 'fallback', None)
+        if hasattr(fallback, 'close'):
+            fallback.close()
         service = getattr(self.capture_adapter, "window_capture", None)
         if service:
             service.close()

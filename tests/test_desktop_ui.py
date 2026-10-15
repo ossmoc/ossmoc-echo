@@ -78,6 +78,49 @@ def test_connect_and_start_route_to_existing_controller(panel):
     assert 'Alt+W' in panel.start_button.text()
 
 
+def test_player_name_save_refresh_clear_and_unsaved_edit(panel):
+    panel.player_name_edit.setText('  Nguyễn A  ')
+    panel.player_name_edit.setModified(True)
+    panel.refresh_data()
+    assert panel.player_name_edit.text() == '  Nguyễn A  '
+    panel.save_player_name_button.click()
+    assert panel.controller.calls[-1] == ('update_auto_settings', (), {'player_name': 'Nguyễn A'})
+    assert panel.player_name_edit.text() == 'Nguyễn A'
+    assert not panel.player_name_edit.isModified()
+    panel.controller.raw['auto_wuwa']['player_name'] = 'Ossmoc'
+    panel.refresh_data()
+    assert panel.player_name_edit.text() == 'Ossmoc'
+    panel.player_name_edit.setText('')
+    panel.player_name_edit.returnPressed.emit()
+    assert panel.controller.raw['auto_wuwa']['player_name'] == ''
+
+
+def test_document_name_update_keeps_scroll_geometry_and_dismissal(app):
+    from ludiglot.ui.auto_overlay import DocumentReader
+    from ludiglot.core.auto_wuwa import AutoDocument, AutoFrameResult, personalize_frame
+    reader = DocumentReader()
+    bounds = {'left': 0, 'top': 0, 'width': 1920, 'height': 1080}
+    raw = AutoFrameResult(document=AutoDocument(('qa', 'document'), 'Thư gửi {player-name}',
+        'Chào {PlayerName}, đây là một đoạn văn bản kiểm thử.\n' * 150))
+    try:
+        reader.set_document(personalize_frame(raw, 'Alice').document, bounds, {})
+        app.processEvents()
+        reader.text.verticalScrollBar().setValue(120)
+        geometry = reader.geometry()
+        reader.set_document(personalize_frame(raw, 'Ossmoc').document, bounds, {})
+        assert reader.title_label.text() == 'Thư gửi Ossmoc'
+        assert 'Alice' not in reader.text.toPlainText()
+        assert reader.text.toPlainText().startswith('Chào Ossmoc')
+        assert reader.text.verticalScrollBar().value() == 120
+        assert reader.geometry() == geometry
+        reader.close()
+        reader.set_document(personalize_frame(raw, 'Tên mới').document, bounds, {})
+        assert not reader.isVisible()
+        assert reader.title_label.text() == 'Thư gửi Tên mới'
+    finally:
+        reader.hide(); reader.deleteLater(); app.processEvents()
+
+
 def test_start_requires_ready_selected_game(panel):
     panel.controller.raw['window_capture']={'mode':'desktop'}; panel.refresh_data()
     assert not panel.start_button.isEnabled()

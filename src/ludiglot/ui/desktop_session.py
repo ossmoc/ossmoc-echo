@@ -94,6 +94,8 @@ class DesktopCaptureSession:
         self._thread: threading.Thread | None = None
         self._cursor = 0
         self._next_realtime_at = 0.0
+        self._auto_wakeup = False
+        self._auto_poll_ms = None
 
     @property
     def running(self) -> bool:
@@ -133,6 +135,19 @@ class DesktopCaptureSession:
         self._pending.clear()
         self._signatures.clear()
         self._next_realtime_at = 0.0
+        self._auto_wakeup = False
+        self._auto_poll_ms = None
+        processor = self._auto_processor_provider() if self._auto_processor_provider else None
+        fallback = getattr(processor, 'fallback', None)
+        if hasattr(fallback, 'cancel'):
+            fallback.cancel()
+
+    def wake_auto(self):
+        """One fresh capture after a completed fallback, never replay an old frame."""
+        with self._condition:
+            if not self._closed and self._running:
+                self._auto_wakeup = True
+                self._condition.notify_all()
 
     def _ensure_worker(self) -> None:
         if self._worker_started or self._closed:
@@ -261,6 +276,8 @@ class DesktopCaptureSession:
     def _interval(self) -> float:
         try:
             seconds = float(getattr(self._config_provider(), "realtime_interval_ms", 350)) / 1000
+            if self._auto_poll_ms is not None:
+                seconds = min(seconds, self._auto_poll_ms / 1000)
             return max(0.05, min(60.0, seconds)) if math.isfinite(seconds) else 0.35
         except Exception:
             return 0.35
@@ -276,6 +293,9 @@ class DesktopCaptureSession:
             active = [r for r in self._regions.values() if self._eligible(r, realtime=True)]
             if self._running and active:
                 remaining = self._next_realtime_at - time.monotonic()
+                if self._auto_wakeup and any(r.id == '__auto_wuwa__' for r in active):
+                    self._auto_wakeup = False
+                    remaining = 0
                 if remaining > 0:
                     self._condition.wait(remaining)
                     continue
@@ -328,9 +348,11 @@ class DesktopCaptureSession:
             processor = self._auto_processor_provider() if self._auto_processor_provider else None
             if processor is None:
                 raise RuntimeError("Chỉ mục Auto chưa sẵn sàng.")
-            settings = self._auto_settings_provider() if self._auto_settings_provider else {}
+            settings = dict(self._auto_settings_provider() if self._auto_settings_provider else {})
+            settings['generation'] = (settings.get('generation'), job.generation)
             result = processor.process(image, self._ocr_engine_provider(), settings,
                                        getattr(config, "ocr_backend", "windows"), force=job.mode == "preview")
+            self._auto_poll_ms = getattr(processor, 'poll_interval_ms', None)
             timing = {**getattr(processor, 'last_timings', {}), 'capture_ms':1000*(captured-started),
                       'worker_ms':1000*(time.perf_counter()-started), 'queued_at':time.perf_counter()}
             self._finish(job, {"auto_frame": result, "capture_bounds": getattr(image, "info", {}).get("capture_bounds"), 'timings':timing}, image if job.mode == "preview" else None,

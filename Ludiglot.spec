@@ -22,4 +22,8 @@ pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="OssmocEcho", debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=bool(os.environ.get("LUDIGLOT_BUILD_DEBUG")),
           icon=str(root / "artifacts" / "app-icon.ico"))
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Ludiglot")
+worker = EXE(pyz, a.scripts, [], exclude_binaries=True, name="OneOcrWorker", debug=False,
+             bootloader_ignore_signals=False, strip=False, upx=False, console=True, contents_directory=".",
+             icon=str(root / "artifacts" / "app-icon.ico"))
+coll = COLLECT(exe, a.binaries + [('OneOcrWorker.exe', worker.name, 'BINARY')], a.datas,
+               strip=False, upx=False, name="Ludiglot")

@@ -678,6 +678,38 @@ def test_cpu_fallback_is_one_bounded_retry_cached_and_never_trusts_unverified_te
     assert not unknown.process(image,Engine({}),AUTO_DEFAULTS).blocks
 
 
+def test_async_fallback_is_polled_on_primary_cache_miss_and_never_trusts_old_ink():
+    image, _ = visual_fixture()
+    story = 'So the time has come.'
+    class AsyncFallback:
+        completed = False
+        tokens = []
+        last_completed_ms = 68
+        cancellations = 0
+        def cancel(self):
+            self.cancellations += 1
+        def poll_or_submit(self, crop, token):
+            self.tokens.append(token)
+            if self.completed and token == self.tokens[0]:
+                return [box(story, x=617, y=27, w=301, h=24)]
+            return None
+    fallback = AsyncFallback()
+    processor = AutoWuwaProcessor(index(entry('Main_Mengzhou_3_6_30_18', story, 'Đã đến lúc.')), fallback)
+    assert not processor.process(image, Engine({}), AUTO_DEFAULTS).blocks
+    fallback.completed = True
+    assert processor.process(image, Engine({}), AUTO_DEFAULTS).blocks[0].target == 'Đã đến lúc.'
+    assert len(fallback.tokens) == 2
+    assert processor.last_timings['fallback_background_ms'] == 68
+    # Different text pixels must not accept the completed OCR for the old crop.
+    changed = image.copy()
+    from PIL import ImageDraw
+    ImageDraw.Draw(changed).text((820, 895), 'Different words now', fill='white')
+    assert not processor.process(changed, Engine({}), AUTO_DEFAULTS).blocks
+    assert fallback.tokens[-1] != fallback.tokens[0]
+    processor.process(image, Engine({}), {**AUTO_DEFAULTS, 'generation': 2})
+    assert fallback.cancellations == 2
+
+
 @pytest.mark.parametrize('contrast', [False, True])
 def test_verified_scene_fragment_returns_full_target_without_cpu_retry(monkeypatch, contrast):
     image,_ = visual_fixture()

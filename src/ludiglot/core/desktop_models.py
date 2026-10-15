@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from ludiglot.core.capture import CaptureRegion
+from ludiglot.core.player_names import normalize_player_name
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ AUTO_DEFAULTS = {
     "background_color": "#3b3e43", "background_opacity": 88,
     "reader_geometry": {}, "reader_font_size": 22, "show_bounds": False,
     "context_hint": "",
+    "player_name": "",
     "story_group": "",
     "presentation_version": 2,
     "light_ocr": True,
@@ -96,6 +98,7 @@ def normalize_auto_settings(value: Any) -> dict[str, Any]:
     result["font_family"] = str(result.get("font_family") or "Segoe UI")
     result["context_hint"] = str(result.get("context_hint") or "")[:160]
     result['story_group'] = str(result.get('story_group') or '')[:160]
+    result['player_name'] = normalize_player_name(result.get('player_name'))
     for key in ("bounds", "reader_geometry"):
         fields = ("left", "top", "width", "height") if key == "bounds" else ("x", "y", "width", "height")
         try:

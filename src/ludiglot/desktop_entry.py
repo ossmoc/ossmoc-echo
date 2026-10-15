@@ -9,6 +9,12 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if len(sys.argv) in (3,4) and sys.argv[1] == '--oneocr-worker':
+        from ludiglot.core.one_ocr import worker_main
+        budget = int(sys.argv[3]) if len(sys.argv) == 4 else 0
+        if not 0 <= budget <= 64:
+            raise SystemExit('Invalid OneOCR CPU budget')
+        raise SystemExit(worker_main(Path(sys.argv[2]), budget))
     from ludiglot.infrastructure.proxy_setup import setup_system_proxy
     setup_system_proxy()
     parser = argparse.ArgumentParser()

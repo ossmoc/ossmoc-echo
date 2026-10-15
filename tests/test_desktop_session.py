@@ -456,3 +456,49 @@ def test_stale_worker_completion_does_not_overwrite_new_generation_deadline(make
     monkeypatch.setattr(session,'_process',lambda _:session._invalidate())
     session._worker_loop()
     assert session._next_realtime_at==0 and not session._pending
+
+
+def test_auto_wakeup_fresh_capture_and_adaptive_cadence_are_generation_safe(monkeypatch):
+    from ludiglot.ui import desktop_session as module
+    from ludiglot.core.auto_wuwa import AutoFrameResult
+    from PIL import Image
+    adapter = Adapter()
+    adapter.image = Image.new('RGB', (100, 100))
+    settings = {'generation': 42}
+    received = []
+    cancellations = []
+    class Processor:
+        fallback = SimpleNamespace(cancel=lambda: cancellations.append(True))
+        poll_interval_ms = 100
+        def process(self, image, engine, options, backend, **kwargs):
+            received.append(options)
+            return AutoFrameResult()
+    processor = Processor()
+    session = DesktopCaptureSession(
+        config_provider=lambda: SimpleNamespace(realtime_interval_ms=350),
+        ocr_engine_provider=lambda: None, matcher_provider=lambda: None,
+        capture_adapter=adapter, callbacks=SessionCallbacks(), thread_starter=lambda _: None,
+        auto_processor_provider=lambda: processor, auto_settings_provider=lambda: settings)
+    try:
+        assert session._interval() == .35
+        session.set_regions([region('__auto_wuwa__')])
+        session.start()
+        with session._condition:
+            job = session._next_job()
+        session._process(job)
+        assert session._interval() == .1
+        assert received == [{'generation': (42, job.generation)}]
+        assert settings == {'generation': 42}
+        session._next_realtime_at = time.monotonic() + 60
+        session.wake_auto()
+        with session._condition:
+            fresh = session._next_job()
+        session._process(fresh)
+        assert len(adapter.calls) == 2  # never publishes the old image directly
+        assert not session._auto_wakeup
+        session.pause()
+        session.wake_auto()
+        assert not session._auto_wakeup
+        assert session._interval() == .35 and cancellations
+    finally:
+        session.close()

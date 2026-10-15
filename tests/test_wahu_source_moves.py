@@ -140,6 +140,43 @@ def test_proven_contraction_is_not_a_reason_to_drop_translation(tmp_path):
     assert row['translation_source']=='wahu_verified_source_move'
 
 
+@pytest.mark.parametrize('old,current', [
+    ("We have arrived, but we have not seen her.", "We've arrived, but we haven't seen her."),
+    ("I did not say he would not return.", "I didn't say he wouldn't return."),
+    ("They are here. You will see them.", "They're here. You'll see them."),
+    ("Do not leave.", "Don't leave."),
+    ("We have arrived.", "We’ve arrived."),
+])
+def test_unambiguous_contractions_keep_proven_source_links(tmp_path, old, current):
+    path = tmp_path / 'project.db'
+    row = fixture_db(path, original=old, current=current)
+    assert WahuTranslationProvider(path).enrich({'a': {'matches': [row]}}, source_moves_only=True).verified_source_moves == 1
+
+
+@pytest.mark.parametrize('old,current', [
+    ('He is gone.', "He's gone."),  # is/has ambiguous
+    ('I would go.', "I'd go."),  # would/had ambiguous
+    ('I do not trust him.', 'I trust him.'),
+    ('We have three days.', "We've four days."),
+    ('She will return.', "She won't return."),
+    ('The Rangers came.', 'The Rangers came with backup.'),
+])
+def test_contraction_rules_do_not_guess_meaning(tmp_path, old, current):
+    path = tmp_path / 'project.db'
+    row = fixture_db(path, original=old, current=current)
+    stats = WahuTranslationProvider(path).enrich({'a': {'matches': [row]}}, source_moves_only=True)
+    assert stats.verified_source_moves == 0
+    assert not row.get('official_vi')
+
+
+def test_contraction_does_not_bypass_chinese_proof(tmp_path):
+    path = tmp_path / 'project.db'
+    row = fixture_db(path, original='We have arrived.', current="We've arrived.")
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE entries_full SET cn='Different original' WHERE dbfile LIKE '%1sthalf%'")
+    assert WahuTranslationProvider(path).enrich({'a': {'matches': [row]}}, source_moves_only=True).verified_source_moves == 0
+
+
 def test_npc_source_move_keeps_all_sync_proof_requirements(tmp_path):
     path=tmp_path/'project.db'; row=fixture_db(path)
     with sqlite3.connect(path) as c:
