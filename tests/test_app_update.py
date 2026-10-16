@@ -19,6 +19,8 @@ def test_update_relaunch_is_visible_while_helper_stays_hidden():
 from ludiglot.core.app_update import (AppUpdater, AppRelease, AppUpdateError, version_tuple,
     validate_url, REQUIRED_FILES, file_hash, RELEASE_API)
 from ludiglot.version import APP_VERSION
+FUTURE_TAG=f'v{version_tuple(APP_VERSION)[0]+1}.0.0'
+FUTURE_NAME=f'OssmocEcho-{FUTURE_TAG}-Windows-x64.zip'
 
 
 def package(extra=(), contents=None):
@@ -34,7 +36,7 @@ def package(extra=(), contents=None):
 
 
 def release(data):
-    return AppRelease('v1.3.0', 'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.3.0/OssmocEcho-v1.3.0-Windows-x64.zip',
+    return AppRelease(FUTURE_TAG, f'https://github.com/ossmoc/ossmoc-echo/releases/download/{FUTURE_TAG}/{FUTURE_NAME}',
                       len(data), hashlib.sha256(data).hexdigest())
 
 
@@ -42,9 +44,8 @@ def opener_for(data):
     return lambda request, **kwargs: io.BytesIO(data)
 
 
-def test_version_is_120_and_independent_of_translation():
+def test_version_matches_package_and_is_independent_of_translation():
     import tomllib
-    assert APP_VERSION == '1.2.0'
     project = Path(__file__).resolve().parents[1] / 'pyproject.toml'
     assert tomllib.loads(project.read_text(encoding='utf-8'))['project']['version'] == APP_VERSION
     assert version_tuple('v1.10.0') > version_tuple('v1.9.9')
@@ -57,9 +58,10 @@ def test_version_is_120_and_independent_of_translation():
     assert not AppRelease('v1.1.2', '', 0, '').available
     assert not AppRelease('v1.1.3', '', 0, '').available
     assert not AppRelease('v1.2.0', '', 0, '').available
-    assert AppRelease('v1.3.0', '', 0, '').available
-    assert 'v1.2.0' in AppRelease('v1.0.2', '', 0, '').summary
-    assert 'v1.2.0' in AppRelease('v1.0.3', '', 0, '').summary
+    assert not AppRelease('v'+APP_VERSION, '', 0, '').available
+    assert AppRelease(FUTURE_TAG, '', 0, '').available
+    assert 'v'+APP_VERSION in AppRelease('v1.0.2', '', 0, '').summary
+    assert 'v'+APP_VERSION in AppRelease('v1.0.3', '', 0, '').summary
 
 
 @pytest.mark.parametrize('tag', ['main', '../1.0.1', 'v1.0.2-rc1', '1.2', '1.2.3.4'])
@@ -79,7 +81,7 @@ def test_only_official_release_urls(url):
 def github_response(data, **changes):
     asset = release(data)
     return {'tag_name': asset.tag, 'draft': False, 'prerelease': False,
-            'assets': [{'name': 'OssmocEcho-v1.3.0-Windows-x64.zip', 'size': asset.size,
+            'assets': [{'name': FUTURE_NAME, 'size': asset.size,
                         'browser_download_url': asset.url, 'digest': 'sha256:' + asset.sha256}], **changes}
 
 
@@ -94,12 +96,12 @@ def test_checksum_asset_fallback(tmp_path):
     value = github_response(data)
     value['assets'][0]['digest'] = ''
     value['assets'].append({'name': 'SHA256SUMS.txt', 'browser_download_url':
-        'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.3.0/SHA256SUMS.txt'})
+        f'https://github.com/ossmoc/ossmoc-echo/releases/download/{FUTURE_TAG}/SHA256SUMS.txt'})
     seen = []
     def opener(request, **kwargs):
         seen.append(request.full_url)
         return io.BytesIO(json.dumps(value).encode() if request.full_url == RELEASE_API else
-                         f'{hashlib.sha256(data).hexdigest()}  OssmocEcho-v1.3.0-Windows-x64.zip\n'.encode())
+                         f'{hashlib.sha256(data).hexdigest()}  {FUTURE_NAME}\n'.encode())
     assert AppUpdater(tmp_path, opener=opener).check_latest().sha256 == release(data).sha256
     assert len(seen) == 2
 

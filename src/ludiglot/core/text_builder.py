@@ -395,7 +395,7 @@ def build_text_db_from_root(data_root: Path) -> Dict[str, dict]:
     return build_text_db(en_json, zh_json, plot_audio=plot_audio, voice_map=voice_map)
 
 
-def build_text_db_from_root_all(data_root: Path) -> Dict[str, dict]:
+def build_text_db_from_root_all(data_root: Path, *, voice_cache_path: Path | None = None, check_cancel=lambda:None) -> Dict[str, dict]:
     from ludiglot.adapters.wuthering_waves.data_mapper import WutheringDataMapper
 
     mapper = WutheringDataMapper(data_root)
@@ -403,7 +403,7 @@ def build_text_db_from_root_all(data_root: Path) -> Dict[str, dict]:
 
     plot_audio = load_plot_audio_map(data_root)
     # 启用缓存，确保 voice_map 可读
-    cache_path = data_root.parent / "cache" / "voice_map_v6.json"
+    cache_path = voice_cache_path or data_root.parent / "cache" / "voice_map_v6.json"
     voice_map = build_voice_map_from_configdb(data_root, cache_path=cache_path)
     db: Dict[str, dict] = {}
 
@@ -419,15 +419,34 @@ def build_text_db_from_root_all(data_root: Path) -> Dict[str, dict]:
             return
         for ext in ("*.json", "*.db"):
             for en_path in en_dir.rglob(ext):
+                check_cancel()
                 rel = en_path.relative_to(en_dir)
                 zh_path = zh_dir / rel
                 if not zh_path.exists():
                     continue
                 try:
+                    if en_path.suffix.casefold()=='.db':
+                        from ludiglot.core.source_records import read_text_file,database_namespace
+                        source_namespace=database_namespace(en_dir,rel)
+                        english = read_text_file(en_path,source_namespace,check_cancel)
+                        chinese = {row.identity:row for row in read_text_file(zh_path,source_namespace,check_cancel)}
+                        tables = {}
+                        for row in english:
+                            tables.setdefault(row.table,[]).append(row)
+                        for table, rows in tables.items():
+                            check_cancel()
+                            part = build_text_db_from_maps({r.key:r.text for r in rows},
+                                {r.key:chinese[r.identity].text for r in rows if r.identity in chinese},
+                                en_path.name, plot_audio=plot_audio, voice_map=voice_map)
+                            for payload in part.values():
+                                for match in payload.get('matches',[]):
+                                    match.update(source_namespace=source_namespace,source_table=table,source_language='en')
+                            merge_partial(part)
+                        continue
                     partial = build_text_db(en_path, zh_path, plot_audio=plot_audio, voice_map=voice_map)
                     merge_partial(partial)
-                except Exception:
-                    continue
+                except (OSError,ValueError,sqlite3.Error) as exc:
+                    raise ValueError(f'Không đọc được nguồn {en_path.name}: {exc}') from exc
 
     for r in roots:
         if not r.exists(): continue
@@ -456,7 +475,10 @@ def build_text_db_from_root_all(data_root: Path) -> Dict[str, dict]:
             return build_text_db_from_root(data_root)
         except Exception:
             pass
-            
+    if db:
+        from ludiglot.core.story_metadata import attach_story_metadata
+        attach_story_metadata(db,data_root,check_cancel)
+        db['__ossmoc_source_schema__']={'matches':[],'version':1}
     return db
 
 

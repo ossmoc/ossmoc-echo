@@ -168,6 +168,8 @@ class ControlPanel(QMainWindow):
         page,layout = self._page('Tiến trình', 'Chọn cốt truyện bạn đang ở hiện tại.')
         self._heading(layout,'Cốt truyện chính')
         self.story_combo = QComboBox(); self.story_combo.currentIndexChanged.connect(self._story_changed)
+        self.story_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.story_combo.setMinimumContentsLength(28)
         layout.addWidget(self.story_combo)
         self.story_combo.setToolTip('Các mốc cốt truyện có trong dữ liệu, không phải phiên bản game đang cài.')
         self._heading(layout,'Đoạn gần nhất')
@@ -294,15 +296,22 @@ class ControlPanel(QMainWindow):
         signature = (tuple((option.key,option.label,option.count) for option in options),selected_side)
         if signature!=self._story_signature:
             self.story_combo.clear(); self.story_combo.addItem('Tự nhận diện (khuyên dùng)','')
-            for option in options: self.story_combo.addItem(option.label,option.key)
+            for option in options:
+                source_count=getattr(option,'source_count',None)
+                label=option.label+(f' · Đã ghép {option.count}/{source_count} mục nguồn' if source_count is not None else '')
+                self.story_combo.addItem(label,option.key)
+                self.story_combo.setItemData(self.story_combo.count()-1,label,Qt.ItemDataRole.ToolTipRole)
+                if not option.seed:
+                    self.story_combo.model().item(self.story_combo.count()-1).setEnabled(False)
             if selected_side: self.story_combo.addItem('Nhiệm vụ phụ đã chọn',selected_side)
             self._story_signature=signature
         selected = self.story_combo.findData(auto.get('story_group',''))
         self.story_combo.setCurrentIndex(max(0,selected))
         hint = auto.get('context_hint',''); scene = dialogue_scene(hint)
         memories = [memory for memory in self.controller.raw.get('story_memory',[]) if isinstance(memory,dict)]
-        memory = next((memory for memory in memories if scene and memory.get('group')==scene[0]),None)
-        label = next((option.label for option in options if scene and option.key==scene[0]),story_label(scene[0])[0] if scene else 'Chưa có đoạn đã ghi nhớ.')
+        memory = next((memory for memory in memories if memory.get('key')==hint),None)
+        group=memory.get('group') if memory else scene[0] if scene else ''
+        label = next((option.label for option in options if option.key==group),story_label(scene[0])[0] if scene else 'Chưa có đoạn đã ghi nhớ.')
         self.dialogue_context_label.setText(label + ('\n“'+str(memory.get('excerpt',''))+'”' if memory and memory.get('excerpt') else ''))
         self.side_memories.clear()
         for memory in memories:

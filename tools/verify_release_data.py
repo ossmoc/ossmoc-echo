@@ -27,6 +27,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--canonical', type=Path, required=True, help='Local canonical-map JSON triples')
+    parser.add_argument('--canonical-root',type=Path)
+    parser.add_argument('--source-root',type=Path)
     parser.add_argument('--cache', type=Path, required=True)
     parser.add_argument('--baseline-database', type=Path, required=True)
     parser.add_argument('--baseline-exe', type=Path, required=True)
@@ -44,8 +46,9 @@ def main():
     exec(old_archive.extract('ludiglot.adapters.wuthering_waves.wahu'), baseline.__dict__)
     if args.frozen_exe:
         compiled = CArchiveReader(str(args.frozen_exe)).open_embedded_archive('PYZ.pyz')
-        for name in ('ludiglot.version', 'ludiglot.core.release_redirects', 'ludiglot.core.release_sources',
-                     'ludiglot.adapters.wuthering_waves.wahu', 'ludiglot.core.auto_wuwa'):
+        for name in ('ludiglot.version','ludiglot.core.source_records','ludiglot.core.story_metadata',
+                     'ludiglot.core.coverage_gate','ludiglot.core.release_redirects', 'ludiglot.core.release_sources',
+                     'ludiglot.adapters.wuthering_waves.wahu', 'ludiglot.core.auto_wuwa','ludiglot.core.translation_update'):
             module = types.ModuleType(name)
             module.__file__ = 'embedded/' + name
             module.__package__ = name.rsplit('.', 1)[0]
@@ -59,8 +62,14 @@ def main():
     old_stats = baseline.WahuTranslationProvider(args.baseline_database, require_source_english=True).enrich(cache)
     old = translations(cache)
     canonical = {(a, b): v for a, b, v in json.loads(args.canonical.read_text(encoding='utf-8'))}
+    if args.canonical_root:
+        from ludiglot.core.translation_update import TranslationUpdater
+        canonical=TranslationUpdater._read_canonical(args.canonical_root,None)
     database = args.output / 'derived.db'
     rebuild_from_release_sources(args.archive, database, canonical, lambda: None)
+    if args.source_root:
+        from ludiglot.core.story_metadata import attach_story_metadata
+        attach_story_metadata(cache,args.source_root)
     stats = WahuTranslationProvider(database, require_source_english=True).enrich(cache)
     new = translations(cache)
     lost = [key[1] for key, vi in old.items() if new.get(key) != vi]
@@ -84,6 +93,19 @@ def main():
               'verified_source_moves': stats.verified_source_moves, 'proof_count': proofs,
               'previous_translations_lost_or_changed': len(lost), 'reported_ids': verified,
               'inputs_unchanged': True, 'input_hashes': before}
+    if args.source_root:
+        from ludiglot.core.story_metadata import coverage
+        result['story_groups']=[{'key':g.key,'version':g.version,'source':g.source_count,'merged':g.count,'indexed':g.indexed_count,'label':g.label} for g in index.story_catalog]
+        result['metadata_coverage']=coverage(cache,index)
+        from collections import Counter
+        before_groups=Counter(key[1].split('_')[0] for key in old)
+        after_groups=Counter(key[1].split('_')[0] for key in new)
+        result['added_by_family']={g:after_groups[g]-before_groups[g] for g in after_groups if after_groups[g]!=before_groups[g]}
+        result['new_37']=len({k for k in new if k[1].startswith('Main_HuangLong_3_7_') or k[1].startswith('Main_Mengzhou_3_7_')})
+        result['zuoye_indexed']=len([r for values in index.exact.values() for r in values if r.identity[1].startswith('Zuoyequnxing_')])
+        result['zuoye_verified_referenced']=sum(r.identity[1].startswith('Zuoyequnxing_') and r.identity[1] in index.members for r in index.records.values())
+        assert result['zuoye_indexed']==result['zuoye_verified_referenced'] and result['zuoye_indexed']>1700
+        assert {'3.1','3.2','3.3','3.4','3.5','3.6','3.7'} <= {g.version for g in index.story_catalog if g.count}
     if args.frozen_exe:
         result['exe_sha256'] = digest(args.frozen_exe)
     (args.output / 'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

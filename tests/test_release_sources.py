@@ -131,3 +131,18 @@ def test_grammar_variants_without_story_proof_remain_rejected(tmp_path):
     data = {'line': {'matches': [{'source_json': 'lang_multi_text.db', 'text_key': 'Main_Test_1_1',
                                  'official_en': 'Got it into my head to learn.', 'official_zh': '原文内容'}]}}
     assert WahuTranslationProvider(database, require_source_english=True).enrich(data).vietnamese_matches == 0
+
+
+def test_future_patch_story_proof_does_not_require_known_dialogue_prefix(tmp_path):
+    key='NovelFamily_Alpha'
+    archive=tmp_path/'release.zip'
+    with zipfile.ZipFile(archive,'w') as package:
+        package.writestr('editor/build_support/TextSource/412_source/4.12_part01.txt',
+            f'@@ lang_multi_text.db||MultiText||{key}\nEN: ****\nCN: ****\n')
+        package.writestr('editor/build_support/Wahu/data/translations_v412_story/01_COT_TRUYEN_CHINH_4.12_CHUA_DICH_PART_01.txt',
+            f'@@ lang_multi_text_1sthalf.db||MultiText||{key}\nEN: Future distinctive source sentence.\nCN: 原文内容\nVI: Bản Việt mới\n')
+    canonical={('lang_multi_text.db',key):'Bản Việt mới',('lang_multi_text_1sthalf.db',key):'Bản Việt khác'}
+    database=rebuild_from_release_sources(archive,tmp_path/'derived.db',canonical,lambda:None)
+    from ludiglot.adapters.wuthering_waves.wahu import WahuTranslationProvider
+    cache={'a':{'matches':[{'source_json':'lang_multi_text.db','text_key':key,'official_en':'Future distinctive source sentence.','official_zh':'原文内容'}]}}
+    assert WahuTranslationProvider(database,require_source_english=True).enrich(cache).vietnamese_matches==1

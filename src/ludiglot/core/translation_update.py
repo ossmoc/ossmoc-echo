@@ -32,7 +32,7 @@ RELEASE_API = "https://api.github.com/repos/WahuVN/Viet-Hoa-WuWa/releases/latest
 _DOWNLOAD_ROOT = "https://github.com/WahuVN/Viet-Hoa-WuWa/releases/download/"
 _TAG_RE = re.compile(r"^v\d+(?:\.\d+){1,3}$")
 _SHA_RE = re.compile(r"^[a-fA-F0-9]{64}$")
-SOURCE_BUILD_REVISION = 4
+SOURCE_BUILD_REVISION = 5
 Progress = Callable[[str], None]
 
 
@@ -60,7 +60,7 @@ def translation_update_status(release: ReleaseInfo, installed: Mapping[str, Any]
         current = any(a.name in database_archive_names(release.tag) and a.sha256 and
                       hashes.get(a.name) == a.sha256 for a in release.assets)
     if current:
-        if (local==remote and installed.get('database_name_mode')=='packaged_seed'
+        if (local==remote and installed.get('database_name_mode') in {'packaged_seed','en','hv','hanviet'}
                 and installed.get('source_build_revision')!=SOURCE_BUILD_REVISION):
             return True, 'Có bản sửa cách ghép dữ liệu; cập nhật lại bản dịch.'
         game = installed.get("translation_game_version") or release.game_version or extract_game_version(release.body)
@@ -253,7 +253,7 @@ class TranslationUpdater:
                 "release_tag": release.tag, "release": release.to_dict(), "variant": "en",
                 "hashes": hashes, "translation_game_version": release.game_version,
                 "source_kind": "wahu_release", "database_name_mode": mode,
-                "source_build_revision": SOURCE_BUILD_REVISION if mode=='packaged_seed' else None,
+                "source_build_revision": SOURCE_BUILD_REVISION,
                 "canonical_en_path": str(generation / "canonical") if canonical is not None else None,
             }
             result = self._merge_and_activate(generation, database, official_cache, metadata, canonical, progress, cancel)
@@ -364,6 +364,34 @@ class TranslationUpdater:
         cache = self._read_cache(official_cache)
         self._check_cancel(cancel)
         current = self.active_manifest()
+        from ludiglot.core.coverage_gate import inventory,regression_report
+        before=inventory(cache)
+        if current.get('cache_path') and Path(current['cache_path']).resolve()!=official_cache.resolve():
+            baseline_cache=self._read_cache(Path(current['cache_path']))
+            before=inventory(baseline_cache)
+            del baseline_cache
+        official_data = self.source_data_root or current.get("official_data_root")
+        if official_data and Path(official_data).is_dir():
+            from ludiglot.core.story_metadata import attach_story_metadata
+            try:
+                from ludiglot.adapters.wuthering_waves.data_mapper import WutheringDataMapper
+                source_roots=WutheringDataMapper(Path(official_data)).text_source_roots()
+                if (cache.get('__ossmoc_source_schema__',{}).get('version')!=1
+                        and any((p/'en').is_dir() for p in source_roots)):
+                    self._emit(progress,'Đang dựng lại định danh bảng và tiến trình từ dữ liệu đã trích xuất (không quét PAK lại)…')
+                    from ludiglot.core.text_builder import build_text_db_from_root_all
+                    rebuilt=build_text_db_from_root_all(Path(official_data),voice_cache_path=generation/'voice-map.json',
+                        check_cancel=lambda:self._check_cancel(cancel))
+                    if not any(payload.get('matches') for payload in rebuilt.values()):
+                        raise ValueError('Nguồn đã trích xuất không dựng được câu văn bản nào.')
+                    cache=rebuilt
+                    self._check_cancel(cancel)
+                else:
+                    from ludiglot.core.source_records import upgrade_cache_identity
+                    upgrade_cache_identity(cache,official_data,lambda:self._check_cancel(cancel))
+                    attach_story_metadata(cache,official_data,lambda:self._check_cancel(cancel))
+            except (ValueError,sqlite3.Error) as exc:
+                raise TranslationUpdateError(f'Metadata nhiệm vụ không hợp lệ; giữ bản cũ: {exc}') from exc
         source_version = self.source_version or current.get("source_version")
         target = metadata.get("translation_game_version")
         cross_version = bool(source_version and target and self._version_pair(source_version) != self._version_pair(target))
@@ -371,7 +399,7 @@ class TranslationUpdater:
         if cross_version:
             warnings.append(f"Bản dịch cho game {target}, văn bản nguồn {source_version}. Quét lại game để có nội dung mới.")
         if not source_version:
-            warnings.append("Chưa xác định phiên bản văn bản nguồn; vẫn kiểm tra nội dung English khi WAHU cung cấp.")
+            warnings.append("Chưa xác định phiên bản văn bản nguồn; vẫn kiểm tra nội dung English khi bản dịch cung cấp.")
         provider = WahuTranslationProvider(
             database, canonical_translations=canonical,
             require_source_english=cross_version or not source_version or not target,
@@ -380,9 +408,26 @@ class TranslationUpdater:
         if not stats.vietnamese_matches:
             raise TranslationUpdateError("Không có bản Việt Tên Anh đã duyệt khớp nguồn hiện tại; giữ nguyên dữ liệu cũ.")
         self._check_cancel(cancel)
+        regression=regression_report(before,inventory(cache))
+        from ludiglot.core.story_metadata import coverage,METADATA_KEY
+        from ludiglot.core.auto_wuwa import AutoTextIndex
+        runtime=AutoTextIndex(cache)
+        group_coverage=coverage(cache,runtime)
+        del runtime
+        audit={'source_build_revision':SOURCE_BUILD_REVISION,'regression':regression,'groups':group_coverage,
+               'warnings':cache.get(METADATA_KEY,{}).get('story',{}).get('warnings',[])}
+        (generation/'coverage.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2),encoding='utf-8')
+        if regression['lost']:
+            raise TranslationUpdateError(f"Bản mới mất {regression['lost']} liên kết có nguồn không đổi; đã chặn kích hoạt và giữ bản cũ. Xem coverage.json.")
+        warnings.extend(audit['warnings'])
+        if any(v['merged']<v['source'] for v in group_coverage.values()):
+            warnings.append('Một số mục nguồn chưa có bản Việt khớp chắc chắn; xem độ bao phủ trong Tiến trình.')
+        self._check_cancel(cancel)
         cache_path = generation / "cache.json"
+        from ludiglot.core.source_records import pack_provenance
+        pack_provenance(cache)
         with cache_path.open("w", encoding="utf-8") as stream:
-            json.dump(cache, stream, ensure_ascii=False, indent=2)
+            json.dump(cache, stream, ensure_ascii=False, separators=(',',':'))
             stream.flush()
             os.fsync(stream.fileno())
         del cache
@@ -393,6 +438,7 @@ class TranslationUpdater:
             "cache_path": str(cache_path), "database_path": str(database),
             "official_data_root": str(official_data) if official_data else None,
             "source_version": source_version, "coverage": asdict(stats),
+            "story_coverage":group_coverage,"coverage_gate":regression,
             "warnings": warnings, "activated_at": self._now(),
         }
         baseline = {
@@ -484,7 +530,8 @@ class TranslationUpdater:
                     raise ValueError("cache không có matches")
                 if any(not isinstance(row, dict) for row in payload["matches"]):
                     raise ValueError("match không hợp lệ")
-            return value
+            from ludiglot.core.source_records import intern_match_aliases
+            return intern_match_aliases(value)
         except (OSError, ValueError, TypeError) as exc:
             raise TranslationUpdateError(f"Cache nguồn không hợp lệ: {exc}") from exc
 
@@ -502,7 +549,10 @@ class TranslationUpdater:
                 if not {"dbfile", "key", "vi", "status"} <= columns:
                     raise TranslationUpdateError("Database WAHU thiếu các cột ID/bản Việt/trạng thái bắt buộc.")
                 if not conn.execute("SELECT 1 FROM entries LIMIT 1").fetchone():
-                    raise EmptyTranslationDatabase("Database trong gói bản dịch không có dữ liệu.")
+                    source_columns={row[1] for row in conn.execute('PRAGMA table_info(source_candidates)')}
+                    if (not {'namespace','tbl','key','en','cn','vi','proof','en_hash','cn_hash'}<=source_columns
+                            or not conn.execute('SELECT 1 FROM source_candidates LIMIT 1').fetchone()):
+                        raise EmptyTranslationDatabase("Database trong gói bản dịch không có dữ liệu.")
                 mode_row = conn.execute("SELECT v FROM meta WHERE k='name_mode'").fetchone()
                 mode = str(mode_row[0]).strip().casefold() if mode_row else ""
                 if mode not in {"en", "hv", "hanviet"}:
@@ -645,8 +695,8 @@ class TranslationUpdater:
 
     @staticmethod
     def _read_canonical(output: Path, cancel: threading.Event | None) -> dict[tuple[str, str], str]:
-        translations: dict[tuple[str, str], str] = {}
-        duplicates: set[tuple[str, str]] = set()
+        from ludiglot.core.source_records import CanonicalTranslations,TextRow
+        translations = CanonicalTranslations()
         for path in output.rglob("*.db"):
             TranslationUpdater._check_cancel(cancel)
             if "/configdb/en/" not in ("/" + path.relative_to(output).as_posix().lower()):
@@ -671,13 +721,9 @@ class TranslationUpdater:
                             value = TranslationUpdater._canonical_value(value, str(text_key))
                             if text_key is None or not isinstance(value, str) or not value.strip():
                                 continue
-                            identity = (path.name.casefold(), str(text_key))
-                            # The overlay does not yet carry table identity. Never guess collisions.
-                            if identity in translations or identity in duplicates:
-                                translations.pop(identity, None)
-                                duplicates.add(identity)
-                            else:
-                                translations[identity] = value
+                            relative=path.relative_to(output).as_posix()
+                            offset=relative.casefold().index('configdb/en/')+len('configdb/en/')
+                            translations.add(TextRow(relative[offset:].casefold(),table,str(text_key),value))
             except sqlite3.Error as exc:
                 raise TranslationUpdateError(f"ConfigDB canonical không hợp lệ: {path.name}: {exc}") from exc
         return translations

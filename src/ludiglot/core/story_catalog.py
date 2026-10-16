@@ -16,6 +16,9 @@ class StoryGroup:
     version: str
     seed: str
     count: int
+    source_count: int | None = None
+    target_count: int | None = None
+    indexed_count: int | None = None
 
 
 AREAS = {'Mengzhou':'Mengzhou', 'LahaiRoi':'Lahai-Roi', 'HuangLong':'Huanglong',

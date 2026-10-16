@@ -564,14 +564,16 @@ def test_new_release_has_one_line_and_does_not_trust_cached_latest(controller, m
 
 def test_joint_check_keeps_app_result_when_translation_network_fails(controller, monkeypatch):
     from types import SimpleNamespace
-    from ludiglot.core.app_update import AppRelease
+    from ludiglot.core.app_update import AppRelease,version_tuple
+    from ludiglot.version import APP_VERSION
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.3.0', '', 10, '')
+    future=f'v{version_tuple(APP_VERSION)[0]+1}.0.0'
+    app_release = AppRelease(future, '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.3.0' in controller.app_update_summary
+    assert controller.app_update_available and future in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 

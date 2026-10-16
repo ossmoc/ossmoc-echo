@@ -71,6 +71,15 @@ def test_panel_has_four_simple_pages_and_new_brand(panel):
     assert not panel.findChildren(QGroupBox)  # No nested cards within cards.
 
 
+def test_progress_coverage_is_active_and_empty_groups_cannot_be_selected(panel):
+    panel.controller.story_options=(StoryGroup('quest:35:3.3','3.3 · Chapter','3.3','Known_1_1',12,15,14,12),
+        StoryGroup('quest:45:3.7','3.7 · Chapter','3.7','',0,7,5,0))
+    panel.refresh_data()
+    assert 'Đã ghép 12/15 mục nguồn' in panel.story_combo.itemText(1)
+    assert panel.story_combo.model().item(1).isEnabled()
+    assert not panel.story_combo.model().item(2).isEnabled()
+
+
 def test_page_headings_are_factual_without_marketing_or_id_introduction(panel):
     labels=[label.text() for label in panel.findChildren(QLabel)]
     headings=[label.text() for label in panel.findChildren(QLabel) if label.objectName()=='pageTitle']

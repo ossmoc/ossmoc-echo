@@ -39,7 +39,7 @@ def story_redirects(archive,canonical,masked,occupied,check_cancel):
                 source=source.casefold()
                 destination=('lang_multi_text.db',key)
                 if (source not in {'lang_multi_text_1sthalf.db','lang_multi_text_2ndhalf.db'}
-                        or table!='MultiText' or not re.fullmatch(r'(?:Main|Side|GNNPC)_.+_\d+_\d+',key)
+                        or table!='MultiText' or not re.fullmatch(r'[A-Za-z0-9_]+',key)
                         or destination in occupied or destination in ambiguous
                         or masked.get(destination)!=(version,table)):
                     return

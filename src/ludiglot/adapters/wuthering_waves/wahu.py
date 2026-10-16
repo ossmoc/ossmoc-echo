@@ -41,6 +41,10 @@ class WahuTranslationProvider:
         self._source_speakers: dict[tuple[str, str], str] = {}
         self._source_moves: dict[tuple[str, str], tuple[str, str, tuple[str, str]]] = {}
         self._release_source_proofs = {}
+        self._candidates = {}
+        self._entry_tables = {}
+        self._reference_chinese = {}
+        self._archive_hash = ''
 
     def load_exact_translations(self) -> dict[tuple[str, str], str]:
         if not self.database_path.is_file():
@@ -76,6 +80,34 @@ class WahuTranslationProvider:
                 self._source_english[identity] = str(english or "")
                 self._source_speakers[identity] = str(speaker or "")
             self._source_moves = self._load_source_moves(connection, translations)
+            self._candidates = {}
+            self._entry_tables = {}
+            self._reference_chinese = {}
+            self._archive_hash = ''
+            candidate_columns = {r[1] for r in connection.execute('PRAGMA table_info(source_candidates)')}
+            if candidate_columns:
+                if not {'namespace','tbl','key','en','cn','vi','proof','en_hash','cn_hash'} <= candidate_columns:
+                    raise ValueError('Schema bằng chứng nguồn chưa được hỗ trợ; giữ bản cũ.')
+                from ludiglot.core.source_records import namespace, fingerprint
+                for ns,tbl,key,en,cn,vi,proof,eh,ch in connection.execute('SELECT namespace,tbl,key,en,cn,vi,proof,en_hash,cn_hash FROM source_candidates'):
+                    if (not all(isinstance(x,str) and x for x in (ns,tbl,key,en,cn,vi))
+                            or proof != 'raw_bilingual_exact' or fingerprint(en)!=eh or fingerprint(cn)!=ch):
+                        raise ValueError('Bằng chứng nguồn bị hỏng; giữ bản cũ.')
+                    ns=namespace(ns)
+                    pair=(Path(ns).name,key)
+                    if self.canonical_translations is not None:
+                        canonical=self.canonical_translations
+                        target=(canonical.target(ns,tbl,key) if hasattr(canonical,'target') else canonical.get(pair,''))
+                        if target != vi:
+                            continue
+                    self._candidates.setdefault(pair,[]).append((ns,tbl,en,cn,vi,eh,ch))
+                refs={r[1] for r in connection.execute('PRAGMA table_info(reference_identity)')}
+                if {'dbfile','key','tbl'}<=refs:
+                    self._entry_tables=dict(((db,key),tbl) for db,key,tbl in connection.execute('SELECT dbfile,key,tbl FROM reference_identity'))
+                    if 'cn' in refs:
+                        self._reference_chinese=dict(((db,key),str(cn or '')) for db,key,cn in connection.execute('SELECT dbfile,key,cn FROM reference_identity'))
+                archive=connection.execute("SELECT v FROM meta WHERE k='source_archive_sha256'").fetchone()
+                self._archive_hash=str(archive[0]) if archive else ''
             self._release_source_proofs = {}
             proof_columns={r[1] for r in connection.execute('PRAGMA table_info(release_source_proofs)')}
             if {'dbfile','key','source_dbfile','tbl','version','en','cn','vi'}<=proof_columns:
@@ -229,14 +261,54 @@ class WahuTranslationProvider:
                 vietnamese = translations.get(exact_identity, "")
                 english = str(match.get("official_en") or "")
                 source_table = str(match.get("source_table") or match.get("tbl") or "")
+                original_chinese=str(match.get('official_zh') or (match.get('official_cn') if not match.get('translation_source') else '') or '')
+                candidates=self._candidates.get(exact_identity,())
+                match.pop('translation_proof',None)
+                match.pop('translation_proof_id',None)
+                match['translation_candidate_present']=bool(vietnamese or candidates)
+                match['translation_rejection']='missing_target'
+                from ludiglot.core.source_records import namespace, fingerprint
+                source_namespace=str(match.get('source_namespace') or '')
+                compatible=[c for c in candidates if (not source_table or source_table==c[1])
+                            and (not source_namespace or namespace(source_namespace)==c[0])
+                            and _source_text(english)==_source_text(c[2])
+                            and original_chinese and _source_text(original_chinese)==_source_text(c[3])]
+                candidate=compatible[0] if len(compatible)==1 else None
+                # Never let the legacy basename view bypass full raw proof.
+                if candidates and exact_identity not in self._entry_tables and exact_identity not in self._release_source_proofs and exact_identity not in self._source_moves:
+                    vietnamese=''
+                legacy_table=self._entry_tables.get(exact_identity)
+                if legacy_table and ((source_table and source_table!=legacy_table)
+                                     or (source_namespace and namespace(source_namespace)!=source_name)):
+                    vietnamese=''
+                if candidate:
+                    ns,tbl,en,cn,vi,eh,ch=candidate
+                    vietnamese=vi
+                    source_table=tbl
+                    match['source_namespace']=ns
+                    match['source_table']=tbl
+                    match['translation_proof']={'kind':'raw_bilingual_exact','archive_sha256':self._archive_hash,
+                        'namespace':ns,'table':tbl,'en_sha256':eh,'cn_sha256':ch,
+                        'target_sha256':fingerprint(vi),'language':'en+zh-Hans','variant':'en'}
+                elif candidates:
+                    match['translation_rejection']='ambiguous_identity' if len(compatible)>1 else 'source_or_table_mismatch'
+                reference_cn=self._reference_chinese.get(exact_identity,'')
+                reference_cn_differs=bool(reference_cn and set(reference_cn.strip())!={'*'} and _source_text(reference_cn)!=_source_text(original_chinese))
+                # The established TXT path proves an exact English source and
+                # reviewed EN-name target. Different Chinese localization is
+                # not a bilingual proof, but must not invalidate unchanged
+                # literal English. Redirect/grammar repairs STILL require CN;
+                # new raw candidates never use this English-only path.
+                if match.get('source_identity_status')=='ambiguous':
+                    vietnamese=''
+                    match['translation_rejection']='ambiguous_identity'
                 count_identity = (source_name, source_table, text_key, _source_text(english))
                 count_entry = count_identity not in counted
                 if count_entry:
                     counted.add(count_identity)
                     official_entries += 1
-                source_english = self._source_english.get(exact_identity, "")
-                proof=self._release_source_proofs.get(exact_identity)
-                original_chinese=str(match.get('official_zh') or (match.get('official_cn') if not match.get('translation_source') else '') or '')
+                source_english = candidate[2] if candidate else self._source_english.get(exact_identity, "")
+                proof=None if candidate else self._release_source_proofs.get(exact_identity)
                 if vietnamese and (
                     (source_english and _source_text(source_english) != _source_text(english)
                      and not (proof and _equivalent_english(source_english, english, {})))
@@ -254,11 +326,19 @@ class WahuTranslationProvider:
                         "" if match.get("translation_source") else str(match.get("official_cn") or "")
                     )
                 if vietnamese:
+                    match.pop('translation_rejection',None)
+                    if not candidate:
+                        match['translation_proof']={'kind':'verified_source_move' if proof or exact_identity in self._source_moves else 'reviewed_source_exact',
+                            'archive_sha256':self._archive_hash,'en_sha256':fingerprint(english),
+                            'cn_sha256':fingerprint(original_chinese),'target_sha256':fingerprint(vietnamese),'variant':'en'}
+                        if reference_cn_differs:
+                            match['translation_proof'].update(reference_cn_sha256=fingerprint(reference_cn),
+                                chinese_evidence='different_localization_not_used',language='en_exact')
                     exact_id_matches += int(count_entry)
                     vietnamese_matches += int(count_entry)
                     match["official_vi"] = vietnamese
                     match["official_cn"] = vietnamese
-                    moved = exact_identity in self._source_moves or proof is not None
+                    moved = not candidate and (exact_identity in self._source_moves or proof is not None)
                     match["translation_source"] = "wahu_verified_source_move" if moved else "wahu_exact_id_reviewed"
                     if moved:
                         verified_source_moves += int(count_entry)

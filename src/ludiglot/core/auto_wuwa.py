@@ -107,6 +107,15 @@ def personalize_frame(frame: AutoFrameResult, player_name: str = '') -> AutoFram
 
 class AutoTextIndex:
     def __init__(self, database: dict[str, Any]):
+        from ludiglot.core.story_metadata import METADATA_KEY
+        self.metadata = database.get(METADATA_KEY,{}).get('story',{})
+        self.members = self.metadata.get('members',{}) if self.metadata.get('schema')==1 else {}
+        self.edges = self.metadata.get('edges',{}) if self.members else {}
+        self._flow_members = {}
+        self._nearby_cache = {}
+        for key,value in self.members.items():
+            for flow in value.get('flows',[]):
+                self._flow_members.setdefault(flow,set()).add(key)
         self.exact: dict[str, list[VerifiedText]] = {}
         self.choice_controls: dict[str, list[VerifiedText]] = {}
         self.documents: dict[tuple[str, str], tuple[VerifiedText, VerifiedText]] = {}
@@ -133,7 +142,11 @@ class AutoTextIndex:
                     continue
                 en, vi = str(item.get("official_en") or ""), str(item.get("official_vi") or "")
                 key = str(item.get("text_key") or "")
-                source = str(item.get("source_json") or "").replace("\\", "/").split("/")[-1].casefold()
+                source = str(item.get('source_namespace') or item.get("source_json") or "").replace("\\", "/").casefold()
+                if not item.get('source_namespace'):
+                    source=source.split('/')[-1]
+                if item.get('source_table'):
+                    source += '|'+str(item['source_table'])
                 identity = (source, key)
                 if not en or not vi or not key:
                     continue
@@ -167,7 +180,7 @@ class AutoTextIndex:
                 self.choice_controls.setdefault(control, []).append(record)
             if re.search(r"(?:_Name|_Title|_Btn|ButtonText|QuestName|Description)$", key, re.I):
                 continue
-            if re.match(r"(?:Side_|Main_|GNNPC_|Huanglong|Rinascita|Chapter|Activity_|Entity_|PrefabTextItem_|Quest_.*InteractContent|.*(?:Plot|Dialogue|Narration))", key, re.I):
+            if key in self.members or re.match(r"(?:Side_|Main_|GNNPC_|Huanglong|Rinascita|Chapter|Activity_|Entity_|PrefabTextItem_|Quest_.*InteractContent|.*(?:Plot|Dialogue|Narration))", key, re.I):
                 norm = normalized(record.english)
                 if norm:
                     self.exact.setdefault(norm, []).append(record)
@@ -180,11 +193,27 @@ class AutoTextIndex:
         for norm, values in self.exact.items():
             for r in values:
                 self._by_id.setdefault(r.identity[1], []).append(r)
-                scene = dialogue_scene(r.identity[1])
+                scene = self._scene(r.identity[1])
                 if scene:
                     self._scene_keys.setdefault((r.identity[0], scene[0], scene[1]), set()).add(norm)
                     self._group_keys.setdefault(scene[0], set()).add(norm)
+                for group in self.members.get(r.identity[1],{}).get('groups',[]):
+                    self._group_keys.setdefault(group,set()).add(norm)
         self.story_catalog = story_catalog(r for values in self.exact.values() for r in values)
+        if self.metadata.get('schema')==1:
+            from ludiglot.core.story_catalog import StoryGroup
+            from ludiglot.core.story_metadata import coverage
+            self.story_coverage = coverage(database,self)
+            catalog=[]
+            for group,detail in self.metadata.get('groups',{}).items():
+                candidates=sorted(key for key in self._by_id if group in self.members.get(key,{}).get('groups',[]) and self.valid_context(key))
+                counts=self.story_coverage.get(group,{})
+                catalog.append(StoryGroup(group,detail['label'],detail['version'],candidates[0] if candidates else '',
+                    counts.get('merged',0),counts.get('source',0),counts.get('target',0),counts.get('indexed',0)))
+            unmapped=[g for g in self.story_catalog if any(not self.members.get(key,{}).get('groups') for key in self._by_id if (scene:=dialogue_scene(key)) and scene[0]==g.key)]
+            if unmapped:
+                catalog.append(StoryGroup('quest:unclassified','Chưa phân nhóm nhiệm vụ','', '',sum(g.count for g in unmapped)))
+            self.story_catalog=tuple(sorted(catalog,key=lambda g:(tuple(map(int,g.version.split('.'))) if g.version else (999,999),g.label,g.key)))
         self.keys = tuple(self.exact)
         self._memo: dict[tuple[Any, ...], VerifiedText | None] = {}
         # Compile variable-name grammar once, and index by a rare mandatory
@@ -220,8 +249,24 @@ class AutoTextIndex:
     def valid_context(self, key: str) -> bool:
         if not key:
             return True
-        return bool(dialogue_scene(key)
+        return bool(self._scene(key)
                     and len({r.identity[0] for r in self._by_id.get(key, [])}) == 1)
+
+    def _scene(self, key):
+        scene=dialogue_scene(key)
+        if scene or key not in self.members:
+            return scene
+        match=re.fullmatch(r'(.+)_(\d+)_(\d+)',str(key))
+        return (match[1],int(match[2]),int(match[3])) if match else (str(key),0,0)
+
+    def group_for_key(self,key):
+        groups=self.members.get(key,{}).get('groups',[])
+        if self.story_group in groups:
+            return self.story_group
+        if len(groups)==1:
+            return groups[0]
+        scene=self._scene(key)
+        return scene[0] if scene else ''
 
     def set_story_group(self, group=""):
         if group and group not in self._group_keys:
@@ -243,7 +288,7 @@ class AutoTextIndex:
             return False
         candidates = self._by_id.get(key, [])
         families = {r.identity[0] for r in candidates}
-        scene = dialogue_scene(key)
+        scene = self._scene(key)
         if key and (not scene or len(families) != 1):
             return False
         self.context_hint = key
@@ -259,19 +304,35 @@ class AutoTextIndex:
         if scene:
             for number in range(scene[1]-1, scene[1]+2):
                 scope.update(self._scene_keys.get((next(iter(families)), scene[0], number), ()))
+            for member in self._metadata_nearby(key):
+                scope.update(normalized(r.english) for r in self._by_id.get(member,()))
         self._scope_keys = tuple(scope)
         self._memo.clear()
         return True
 
     def _scoped(self, records):
-        hint = dialogue_scene(self.context_hint)
+        hint = self._scene(self.context_hint)
         sources = {r.identity[0] for r in self._by_id.get(self.context_hint, [])}
         result = []
         for r in records:
-            scene = dialogue_scene(r.identity[1])
+            scene = self._scene(r.identity[1])
+            if self.context_hint in self.members:
+                if r.identity[0] in sources and r.identity[1] in self._metadata_nearby(self.context_hint):
+                    result.append(r)
+                continue
             if hint and scene and r.identity[0] in sources and hint[0] == scene[0] and abs(hint[1]-scene[1]) <= 1:
                 result.append(r)
-        return result or [r for r in records if (scene:=dialogue_scene(r.identity[1])) and scene[0]==self.story_group]
+        return result or [r for r in records if self.story_group in self.members.get(r.identity[1],{}).get('groups',[]) or ((scene:=self._scene(r.identity[1])) and scene[0]==self.story_group)]
+
+    def _metadata_nearby(self,key):
+        if key not in self._nearby_cache:
+            result=set()
+            for flow in self.members.get(key,{}).get('flows',[]):
+                result.update(self._flow_members.get(flow,()))
+            if len(self._nearby_cache)>1000:
+                self._nearby_cache.clear()
+            self._nearby_cache[key]=result
+        return self._nearby_cache[key]
 
     @staticmethod
     def _unique(matches):
@@ -388,7 +449,7 @@ class AutoTextIndex:
         return matches[0] if matches else None
 
     def _forward_window(self) -> tuple[VerifiedText, ...]:
-        """Current + at most six existing records, never a generated next ID.
+        """Metadata successors (bounded), or a legacy six-record numeric window.
 
         Keep both the numeric-gap and record-count bounds. Only the anchor's
         source/group, current scene and the immediately next scene qualify.
@@ -398,11 +459,23 @@ class AutoTextIndex:
             return ()
         if self.context_hint == self._forward_cache_hint:
             return self._forward_cache
-        hint = dialogue_scene(self.context_hint)
+        hint = self._scene(self.context_hint)
         anchors = self._by_id.get(self.context_hint, [])
         if not hint or len(anchors) != 1:
             return ()
         anchor = anchors[0]
+        if self.context_hint in self.members:
+            # Metadata describes possible edges, never the observed player
+            # branch. Keep all bounded successors so ambiguous short OCR fails.
+            keys=[self.context_hint]; frontier=[self.context_hint]; seen=set(keys)
+            for _ in range(6):
+                frontier=[other for key in frontier for other in self.edges.get(key,[]) if other not in seen]
+                seen.update(frontier); keys.extend(frontier)
+                if len(keys)>32:
+                    return ()
+            self._forward_cache_hint=self.context_hint
+            self._forward_cache=tuple(r for key in keys for r in self._by_id.get(key,()) if r.identity[0]==anchor.identity[0])
+            return self._forward_cache
         nearby = []
         for number in (hint[1], hint[1] + 1):
             for norm in self._scene_keys.get((anchor.identity[0], hint[0], number), ()):
@@ -425,6 +498,8 @@ class AutoTextIndex:
         """Short exact visible text; two-word typos are still not guessed."""
         if len(query) < 2:
             return None
+        if self.context_hint in self.members and not self._context_observed:
+            return None  # Chapter selection/saved state is not an observed node.
         matches = {record.identity: record for record in self._forward_window()
                    if normalized(record.english) == query}
         return next(iter(matches.values())) if len(matches) == 1 else None

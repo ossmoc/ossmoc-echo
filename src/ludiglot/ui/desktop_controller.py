@@ -229,6 +229,14 @@ class DesktopController(QObject):
                 db = json.loads(cfg.db_path.read_text(encoding="utf-8"))
                 if not isinstance(db, dict) or not db:
                     raise ValueError("Dữ liệu tra cứu trống hoặc không hợp lệ.")
+                from ludiglot.core.source_records import intern_match_aliases
+                intern_match_aliases(db)
+                from ludiglot.core.story_metadata import METADATA_KEY,attach_story_metadata
+                if METADATA_KEY not in db and cfg.data_root and cfg.data_root.is_dir():
+                    try:
+                        attach_story_metadata(db,cfg.data_root)
+                    except (OSError,ValueError) as exc:
+                        self.log_message.emit(f'Chưa đọc được metadata tiến trình; giữ bản dịch đang dùng: {exc}')
                 if cfg.wahu_db_path:
                     from ludiglot.adapters.wuthering_waves.wahu import WahuTranslationProvider
                     import sqlite3
@@ -277,6 +285,13 @@ class DesktopController(QObject):
         if hasattr(previous, 'close'):
             previous.close()
         self.auto_processor = payload.get("auto_processor")
+        if self.auto_processor:
+            index=self.auto_processor.index
+            options=self.raw.get('auto_wuwa',{})
+            selected=options.get('story_group','')
+            if selected and selected not in {g.key for g in index.story_catalog}:
+                recovered=index.group_for_key(options.get('context_hint',''))
+                options['story_group']=recovered if recovered in {g.key for g in index.story_catalog if g.seed} else ''
         fallback = getattr(self.auto_processor, 'fallback', None)
         if hasattr(fallback, 'set_wakeup'):
             fallback.set_wakeup(self.session.wake_auto)
@@ -288,6 +303,13 @@ class DesktopController(QObject):
         coverage = payload.get("coverage", {})
         self.data_summary += f"\n{coverage.get('vietnamese', 0):,} câu Việt • {coverage.get('english_fallback', 0):,} câu fallback English"
         self.data_summary += "\nNguồn game: " + str(self.raw.get("official_source_version") or "dữ liệu cục bộ; làm mới sau khi game cập nhật")
+        if self.auto_processor:
+            for option in self.auto_processor.index.story_catalog:
+                if option.source_count is not None:
+                    self.data_summary += (f'\n{option.label}: nguồn {option.source_count:,}; có target {option.target_count:,}; '
+                        f'đã ghép {option.count:,}; tra cứu {option.indexed_count:,}.')
+            for warning in self.auto_processor.index.metadata.get('warnings',[]):
+                self.data_summary += '\n⚠ '+str(warning)
         try:
             manifest = self._updater().active_manifest()
             if manifest:
@@ -490,7 +512,7 @@ class DesktopController(QObject):
             return False
         import re
         from ludiglot.core.story_catalog import dialogue_scene
-        if key and not dialogue_scene(key):
+        if key and not self.auto_processor.index.valid_context(key):
             self._set_status("ID này không phải đoạn hội thoại Main/Side được hỗ trợ.")
             return False
         self._auto_revision += 1
@@ -526,11 +548,13 @@ class DesktopController(QObject):
     def _remember_story(self, block):
         from ludiglot.core.story_catalog import dialogue_scene, story_label
         scene = dialogue_scene(block.identity[1])
-        if not scene:
+        index = self.auto_processor.index if self.auto_processor else None
+        prefix = index.group_for_key(block.identity[1]) if index else (scene[0] if scene else '')
+        if not prefix:
             return
-        prefix = scene[0]
+        label=next((g.label for g in self.story_options if g.key==prefix),story_label(prefix)[0])
         memory = {'group':prefix,'key':block.identity[1],
-                  'label':story_label(prefix)[0], 'kind':'side' if prefix.startswith('Side_') else 'main',
+                  'label':label, 'kind':'side' if prefix.startswith('Side_') else 'main',
                   'excerpt':self._plain(block.source)[:180]}
         memories = self.raw.get('story_memory', [])
         memories = [m for m in memories if isinstance(m,dict) and m.get('group')!=prefix]
