@@ -85,7 +85,11 @@ def test_story_redirect_requires_explicit_multi_language_proof(tmp_path,mutation
     good=source()
     assert provider.enrich(good).vietnamese_matches==1
     assert good['line']['matches'][0]['translation_source']=='wahu_verified_source_move'
-    for bad in (source(cn='不同原文'),source(en='Different English'),source(cn=''),source(table='OtherTable')):
+    # v1.3.1: exact source text no longer needs CN, and a unique ID + exact
+    # Chinese can recover an English localization revision.
+    for recovered in (source(en='Different English'), source(cn='')):
+        assert provider.enrich(recovered).vietnamese_matches==1
+    for bad in (source(cn='不同原文'),source(table='OtherTable')):
         assert provider.enrich(bad).vietnamese_matches==0
 
 
@@ -114,9 +118,10 @@ def test_story_proof_accepts_reviewed_grammar_only_with_exact_chinese(tmp_path, 
     assert good['line']['matches'][0]['official_vi'] == 'Tôi muốn học.'
     # Repeated updates must read original Chinese, never mirrored Vietnamese.
     assert provider.enrich(good).vietnamese_matches == 1
-    for bad in (sample(cn='不同原文'), sample(cn=''), sample(table='Other'),
+    for recovered in (sample(cn=''),sample(en='Got it into my head to fight.')):
+        assert provider.enrich(recovered).vietnamese_matches == 1
+    for bad in (sample(cn='不同原文'), sample(table='Other'),
                 sample(en='Got it into my head not to learn.'),
-                sample(en='Got it into my head to fight.'),
                 sample(en='Got it into my head to learn 2 things.')):
         assert provider.enrich(bad).vietnamese_matches == 0
 

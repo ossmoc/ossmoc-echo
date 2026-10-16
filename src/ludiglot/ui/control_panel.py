@@ -172,6 +172,7 @@ class ControlPanel(QMainWindow):
         self.story_combo.setMinimumContentsLength(28)
         layout.addWidget(self.story_combo)
         self.story_combo.setToolTip('Các mốc cốt truyện có trong dữ liệu, không phải phiên bản game đang cài.')
+        layout.addWidget(self._label('Thống kê ghép không tính tên nhân vật và cảnh không có văn bản English.',muted=True))
         self._heading(layout,'Đoạn gần nhất')
         self.dialogue_context_label = self._label(); layout.addWidget(self.dialogue_context_label)
         self._heading(layout,'Nhiệm vụ phụ gần đây')
@@ -293,7 +294,8 @@ class ControlPanel(QMainWindow):
                                (shot+' · ' if shot else '')+'Chụp kèm bản dịch')
         options = getattr(self.controller,'story_options',())
         selected_side = auto.get('story_group','') if str(auto.get('story_group','')).startswith('Side_') else ''
-        signature = (tuple((option.key,option.label,option.count) for option in options),selected_side)
+        signature = (tuple((option.key,option.label,option.count,getattr(option,'source_count',None),
+                            getattr(option,'target_count',None),getattr(option,'indexed_count',None)) for option in options),selected_side)
         if signature!=self._story_signature:
             self.story_combo.clear(); self.story_combo.addItem('Tự nhận diện (khuyên dùng)','')
             for option in options:

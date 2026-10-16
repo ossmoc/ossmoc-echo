@@ -142,9 +142,12 @@ def attach_story_metadata(cache, root, check_cancel=lambda:None):
 
 
 def coverage(cache, index=None):
+    from ludiglot.core.staged_merge import name_only_keys
+    excluded = name_only_keys(cache)
     metadata = cache.get(METADATA_KEY,{}).get('story',{})
     members = metadata.get('members',{})
-    groups = {key:{'source':set(),'target':set(),'merged':set(),'indexed':set()} for key in metadata.get('groups',{})}
+    groups = {key:{'source':set(),'target':set(),'merged':set(),'indexed':set(),
+                   'excluded_names':set(),'no_english':set()} for key in metadata.get('groups',{})}
     seen = set()
     for payload in cache.values():
         for row in payload.get('matches',[]):
@@ -156,6 +159,12 @@ def coverage(cache, index=None):
             seen.add(ident)
             for group in members.get(key,{}).get('groups',[]):
                 values = groups[group]
+                if key in excluded:
+                    values['excluded_names'].add(ident)
+                    continue
+                if not str(row.get('official_en') or '').strip():
+                    values['no_english'].add(ident)
+                    continue
                 values['source'].add(ident)
                 if row.get('translation_candidate_present') or row.get('official_vi'):
                     values['target'].add(ident)

@@ -140,6 +140,8 @@ class AutoTextIndex:
                         self.speaker_names.add(name)
                 if item.get("translation_source") not in {"wahu_exact_id_reviewed", "wahu_verified_source_move"}:
                     continue
+                if item.get('translation_excluded') == 'name_only':
+                    continue
                 en, vi = str(item.get("official_en") or ""), str(item.get("official_vi") or "")
                 key = str(item.get("text_key") or "")
                 source = str(item.get('source_namespace') or item.get("source_json") or "").replace("\\", "/").casefold()

@@ -233,6 +233,25 @@ class WahuTranslationProvider:
 
     def enrich(self, database: dict[str, dict[str, Any]], *, source_moves_only: bool = False) -> WahuMergeStats:
         translations = self.load_exact_translations()
+        from ludiglot.core.staged_merge import Candidate, StagedMatcher, name_only_keys
+        excluded_names = name_only_keys(database)
+        matcher = None
+
+        def recover(ns, table, key, en, cn):
+            nonlocal matcher
+            if matcher is None:
+                sources = [Candidate(ns, tbl, key, en, cn, vi)
+                           for (_, key), values in self._candidates.items()
+                           for ns, tbl, en, cn, vi, _, _ in values]
+                for pair, vi in translations.items():
+                    proof = self._release_source_proofs.get(pair)
+                    tbl = self._entry_tables.get(pair) or (proof[1] if proof else '')
+                    if tbl:
+                        sources.append(Candidate(pair[0], tbl, pair[1], self._source_english.get(pair, ''),
+                            self._reference_chinese.get(pair, '') or (proof[0] if proof else ''), vi))
+                members = database.get('__ossmoc_story_metadata__', {}).get('story', {}).get('members', {})
+                matcher = StagedMatcher(sources, members)
+            return matcher.resolve(ns, table, key, en, cn)
         seen: set[int] = set()
         counted: set[tuple[str, str, str, str]] = set()
         official_entries = exact_id_matches = vietnamese_matches = 0
@@ -265,6 +284,11 @@ class WahuTranslationProvider:
                 candidates=self._candidates.get(exact_identity,())
                 match.pop('translation_proof',None)
                 match.pop('translation_proof_id',None)
+                match.pop('merge_method', None)
+                match.pop('merge_similarity', None)
+                match.pop('translation_excluded', None)
+                if text_key in excluded_names:
+                    match['translation_excluded'] = 'name_only'
                 match['translation_candidate_present']=bool(vietnamese or candidates)
                 match['translation_rejection']='missing_target'
                 from ludiglot.core.source_records import namespace, fingerprint
@@ -319,6 +343,26 @@ class WahuTranslationProvider:
                     vietnamese = ""
                     incompatible_source_entries += int(count_entry)
 
+                recovered = None
+                if (not vietnamese and english and text_key not in excluded_names
+                        and match.get('source_identity_status') != 'ambiguous'):
+                    recovered, method, score, reason = recover(source_namespace or source_name,
+                        source_table, text_key, english, original_chinese)
+                    if recovered:
+                        vietnamese = recovered.vietnamese
+                        match['merge_method'] = method
+                        match['merge_similarity'] = round(score, 6)
+                        match['translation_candidate_present'] = True
+                        match['translation_proof'] = {'kind': 'staged_source_match', 'stage': method,
+                            'similarity': round(score, 6), 'archive_sha256': self._archive_hash,
+                            'source_namespace': recovered.namespace, 'source_table': recovered.table,
+                            'source_key': recovered.key, 'source_en_sha256': fingerprint(recovered.english),
+                            'source_cn_sha256': fingerprint(recovered.chinese),
+                            'en_sha256': fingerprint(english), 'cn_sha256': fingerprint(original_chinese),
+                            'target_sha256': fingerprint(vietnamese), 'variant': 'en'}
+                    elif reason == 'ambiguous_candidates':
+                        match['translation_rejection'] = reason
+
                 # A saved cache already mirrors Vietnamese into official_cn. Never
                 # mistake that target for original Chinese on the next update.
                 if "official_zh" not in match:
@@ -327,7 +371,7 @@ class WahuTranslationProvider:
                     )
                 if vietnamese:
                     match.pop('translation_rejection',None)
-                    if not candidate:
+                    if not candidate and not recovered:
                         match['translation_proof']={'kind':'verified_source_move' if proof or exact_identity in self._source_moves else 'reviewed_source_exact',
                             'archive_sha256':self._archive_hash,'en_sha256':fingerprint(english),
                             'cn_sha256':fingerprint(original_chinese),'target_sha256':fingerprint(vietnamese),'variant':'en'}
@@ -344,6 +388,8 @@ class WahuTranslationProvider:
                         verified_source_moves += int(count_entry)
                         match["translation_origin"] = ([proof[2],text_key] if proof
                                                        else list(self._source_moves[exact_identity][2]))
+                    if recovered:
+                        match['translation_origin'] = [recovered.namespace, recovered.key]
                 elif english:
                     english_fallbacks += int(count_entry)
                     match["official_vi"] = ""
