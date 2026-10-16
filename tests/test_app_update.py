@@ -34,7 +34,7 @@ def package(extra=(), contents=None):
 
 
 def release(data):
-    return AppRelease('v1.1.4', 'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.1.4/OssmocEcho-v1.1.4-Windows-x64.zip',
+    return AppRelease('v1.3.0', 'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.3.0/OssmocEcho-v1.3.0-Windows-x64.zip',
                       len(data), hashlib.sha256(data).hexdigest())
 
 
@@ -42,9 +42,9 @@ def opener_for(data):
     return lambda request, **kwargs: io.BytesIO(data)
 
 
-def test_version_is_113_and_independent_of_translation():
+def test_version_is_120_and_independent_of_translation():
     import tomllib
-    assert APP_VERSION == '1.1.3'
+    assert APP_VERSION == '1.2.0'
     project = Path(__file__).resolve().parents[1] / 'pyproject.toml'
     assert tomllib.loads(project.read_text(encoding='utf-8'))['project']['version'] == APP_VERSION
     assert version_tuple('v1.10.0') > version_tuple('v1.9.9')
@@ -56,9 +56,10 @@ def test_version_is_113_and_independent_of_translation():
     assert not AppRelease('v1.1.1', '', 0, '').available
     assert not AppRelease('v1.1.2', '', 0, '').available
     assert not AppRelease('v1.1.3', '', 0, '').available
-    assert AppRelease('v1.1.4', '', 0, '').available
-    assert 'v1.1.3' in AppRelease('v1.0.2', '', 0, '').summary
-    assert 'v1.1.3' in AppRelease('v1.0.3', '', 0, '').summary
+    assert not AppRelease('v1.2.0', '', 0, '').available
+    assert AppRelease('v1.3.0', '', 0, '').available
+    assert 'v1.2.0' in AppRelease('v1.0.2', '', 0, '').summary
+    assert 'v1.2.0' in AppRelease('v1.0.3', '', 0, '').summary
 
 
 @pytest.mark.parametrize('tag', ['main', '../1.0.1', 'v1.0.2-rc1', '1.2', '1.2.3.4'])
@@ -78,7 +79,7 @@ def test_only_official_release_urls(url):
 def github_response(data, **changes):
     asset = release(data)
     return {'tag_name': asset.tag, 'draft': False, 'prerelease': False,
-            'assets': [{'name': 'OssmocEcho-v1.1.4-Windows-x64.zip', 'size': asset.size,
+            'assets': [{'name': 'OssmocEcho-v1.3.0-Windows-x64.zip', 'size': asset.size,
                         'browser_download_url': asset.url, 'digest': 'sha256:' + asset.sha256}], **changes}
 
 
@@ -93,12 +94,12 @@ def test_checksum_asset_fallback(tmp_path):
     value = github_response(data)
     value['assets'][0]['digest'] = ''
     value['assets'].append({'name': 'SHA256SUMS.txt', 'browser_download_url':
-        'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.1.4/SHA256SUMS.txt'})
+        'https://github.com/ossmoc/ossmoc-echo/releases/download/v1.3.0/SHA256SUMS.txt'})
     seen = []
     def opener(request, **kwargs):
         seen.append(request.full_url)
         return io.BytesIO(json.dumps(value).encode() if request.full_url == RELEASE_API else
-                         f'{hashlib.sha256(data).hexdigest()}  OssmocEcho-v1.1.4-Windows-x64.zip\n'.encode())
+                         f'{hashlib.sha256(data).hexdigest()}  OssmocEcho-v1.3.0-Windows-x64.zip\n'.encode())
     assert AppUpdater(tmp_path, opener=opener).check_latest().sha256 == release(data).sha256
     assert len(seen) == 2
 
@@ -157,6 +158,28 @@ def test_missing_runtime_or_bad_exe(tmp_path):
     data = package(contents={'OssmocEcho.exe': b'not an exe'})
     with pytest.raises(AppUpdateError):
         AppUpdater(tmp_path, opener=opener_for(data)).prepare(release(data))
+
+
+def test_full_disk_does_not_download_or_touch_existing_install(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import ludiglot.core.app_update as module
+    (tmp_path / 'OssmocEcho.exe').write_bytes(b'old executable')
+    monkeypatch.setattr(module.shutil, 'disk_usage', lambda _: SimpleNamespace(free=0))
+    def no_network(*_a, **_k):
+        pytest.fail('Disk check must precede download')
+    with pytest.raises(AppUpdateError, match='dung lượng'):
+        AppUpdater(tmp_path, opener=no_network).prepare(release(package()))
+    assert (tmp_path / 'OssmocEcho.exe').read_bytes() == b'old executable'
+    assert not (tmp_path / 'userdata').exists()
+
+
+@pytest.mark.parametrize('response', [b'<html>proxy error</html>', b'{bad json', b'{}'])
+def test_bad_update_metadata_keeps_user_files(tmp_path, response):
+    (tmp_path / 'OssmocEcho.exe').write_bytes(b'old executable')
+    with pytest.raises((ValueError, AppUpdateError)):
+        AppUpdater(tmp_path, opener=opener_for(response)).check_latest()
+    assert (tmp_path / 'OssmocEcho.exe').read_bytes() == b'old executable'
+    assert not (tmp_path / 'userdata').exists()
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Native Windows replacement helper')

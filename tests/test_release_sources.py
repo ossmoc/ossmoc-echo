@@ -48,7 +48,7 @@ def test_cancellation_does_not_create_database(tmp_path):
 
 
 @pytest.mark.parametrize('mutation,accepted',[
-    ('valid',True),('wrong_vi',False),('same_sibling_target',False),
+    ('valid',True),('wrong_vi',False),('same_sibling_target',True),
     ('wrong_version',False),('no_mask',False),('ambiguous',False),
 ])
 def test_story_redirect_requires_explicit_multi_language_proof(tmp_path,mutation,accepted):
@@ -87,3 +87,47 @@ def test_story_redirect_requires_explicit_multi_language_proof(tmp_path,mutation
     assert good['line']['matches'][0]['translation_source']=='wahu_verified_source_move'
     for bad in (source(cn='不同原文'),source(en='Different English'),source(cn=''),source(table='OtherTable')):
         assert provider.enrich(bad).vietnamese_matches==0
+
+
+@pytest.mark.parametrize('same_target', [False, True])
+def test_story_proof_accepts_reviewed_grammar_only_with_exact_chinese(tmp_path, same_target):
+    from ludiglot.adapters.wuthering_waves.wahu import WahuTranslationProvider
+    key = 'Main_Mengzhou_3_6_94_1'
+    old = 'Got it in my head to learn.'
+    current = 'Got it into my head to learn.'
+    archive = tmp_path / 'release.zip'
+    with zipfile.ZipFile(archive, 'w') as package:
+        package.writestr('editor/build_support/TextSource/36_source/3.6_part01.txt',
+                        f'@@ lang_multi_text.db||MultiText||{key}\nEN: ****\nCN: ****\n')
+        package.writestr('editor/build_support/Wahu/data/translations_v36_story/01_COT_TRUYEN_CHINH_3.6_CHUA_DICH_PART_01.txt',
+                        f'@@ lang_multi_text_1sthalf.db||MultiText||{key}\nEN: {old}\nCN: 原文内容\nVI: Tôi muốn học.\n')
+    database = rebuild_from_release_sources(archive, tmp_path / 'derived.db', {
+        ('lang_multi_text.db', key): 'Tôi muốn học.',
+        ('lang_multi_text_1sthalf.db', key): 'Tôi muốn học.' if same_target else 'Bản khác.',
+    }, lambda: None)
+    provider = WahuTranslationProvider(database, require_source_english=True)
+    def sample(en=current, cn='原文内容', table='MultiText'):
+        return {'line': {'matches': [{'source_json': 'lang_multi_text.db', 'text_key': key,
+            'official_en': en, 'official_zh': cn, 'source_table': table}]}}
+    good = sample()
+    assert provider.enrich(good).vietnamese_matches == 1
+    assert good['line']['matches'][0]['official_vi'] == 'Tôi muốn học.'
+    # Repeated updates must read original Chinese, never mirrored Vietnamese.
+    assert provider.enrich(good).vietnamese_matches == 1
+    for bad in (sample(cn='不同原文'), sample(cn=''), sample(table='Other'),
+                sample(en='Got it into my head not to learn.'),
+                sample(en='Got it into my head to fight.'),
+                sample(en='Got it into my head to learn 2 things.')):
+        assert provider.enrich(bad).vietnamese_matches == 0
+
+
+def test_grammar_variants_without_story_proof_remain_rejected(tmp_path):
+    from ludiglot.adapters.wuthering_waves.wahu import WahuTranslationProvider
+    database = tmp_path / 'normal.db'
+    with sqlite3.connect(database) as connection:
+        connection.execute('CREATE TABLE entries(dbfile TEXT,key TEXT,en TEXT,vi TEXT,status TEXT)')
+        connection.execute('INSERT INTO entries VALUES (?,?,?,?,?)',
+            ('lang_multi_text.db', 'Main_Test_1_1', 'Got it in my head to learn.', 'Tôi muốn học.', 'final'))
+    data = {'line': {'matches': [{'source_json': 'lang_multi_text.db', 'text_key': 'Main_Test_1_1',
+                                 'official_en': 'Got it into my head to learn.', 'official_zh': '原文内容'}]}}
+    assert WahuTranslationProvider(database, require_source_english=True).enrich(data).vietnamese_matches == 0

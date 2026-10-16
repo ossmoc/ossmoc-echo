@@ -32,7 +32,7 @@ RELEASE_API = "https://api.github.com/repos/WahuVN/Viet-Hoa-WuWa/releases/latest
 _DOWNLOAD_ROOT = "https://github.com/WahuVN/Viet-Hoa-WuWa/releases/download/"
 _TAG_RE = re.compile(r"^v\d+(?:\.\d+){1,3}$")
 _SHA_RE = re.compile(r"^[a-fA-F0-9]{64}$")
-SOURCE_BUILD_REVISION = 3
+SOURCE_BUILD_REVISION = 4
 Progress = Callable[[str], None]
 
 

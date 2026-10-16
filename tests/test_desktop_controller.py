@@ -532,7 +532,7 @@ def test_open_check_does_not_skip_recent_cached_release(controller, monkeypatch)
     calls = []
     monkeypatch.setattr(controller, "_start_job", lambda kind, work: calls.append((kind, work())))
     controller.check_updates(force=False)
-    assert calls == [("check", {'translation': marker, 'app': 'app release'})]
+    assert calls == [("check", {'background': True, 'translation': marker, 'app': 'app release'})]
     controller.check_updates(force=False)
     assert len(calls) == 1
 
@@ -566,12 +566,12 @@ def test_joint_check_keeps_app_result_when_translation_network_fails(controller,
     from types import SimpleNamespace
     from ludiglot.core.app_update import AppRelease
     def offline(): raise OSError('offline translation')
-    app_release = AppRelease('v1.1.4', '', 10, '')
+    app_release = AppRelease('v1.3.0', '', 10, '')
     monkeypatch.setattr(controller, '_updater', lambda: SimpleNamespace(check_latest=offline))
     monkeypatch.setattr(controller, '_app_updater', lambda: SimpleNamespace(check_latest=lambda: app_release))
     monkeypatch.setattr(controller, '_start_job', lambda kind, work: controller._on_job_finished({'kind':kind,'result':work()}))
     controller.check_updates()
-    assert controller.app_update_available and 'v1.1.4' in controller.app_update_summary
+    assert controller.app_update_available and 'v1.3.0' in controller.app_update_summary
     assert not controller.update_available
     assert 'Không kiểm tra' in controller.update_summary
 
@@ -587,6 +587,22 @@ def test_joint_check_keeps_translation_result_when_app_network_fails(controller,
     controller.check_updates()
     assert not controller.update_available and 'Đã là bản mới nhất' in controller.update_summary
     assert not controller.app_update_available and 'Không kiểm tra' in controller.app_update_summary
+
+
+@pytest.mark.parametrize('error', ['', 'Windows OCR English chưa sẵn sàng.'])
+def test_background_check_preserves_first_run_instruction_or_ocr_error(controller, error):
+    controller._initialization_error = error
+    controller._on_job_finished({'kind': 'check', 'result': {
+        'background': True, 'translation_error': 'offline', 'app_error': 'offline'}})
+    assert controller.status == (error or controller_module.MISSING_ENGLISH_DATA)
+    assert not controller.update_available and not controller.app_update_available
+
+
+def test_explicit_update_check_still_shows_its_result_when_initialization_failed(controller):
+    controller._initialization_error = 'Windows OCR English chưa sẵn sàng.'
+    controller._on_job_finished({'kind': 'check', 'result': {
+        'background': False, 'translation_error': 'offline', 'app_error': 'offline'}})
+    assert 'Không kiểm tra được cập nhật bản dịch' in controller.status
 
 
 def test_translation_label_uses_friendly_name(controller, monkeypatch):

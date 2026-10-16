@@ -75,8 +75,11 @@ def test_outline_does_not_paint_over_white_glyph_fill(overlay, app):
     block = AutoTextBlock("dialogue", (480,890,970,72), "English", "Chữ Việt", ("db","Side_1"))
     overlay.set_frame({"left":0,"top":0,"width":1920,"height":1080}, (block,), AUTO_DEFAULTS)
     image = overlay.grab().toImage()
+    # QPixmap.grab returns device pixels; the overlay geometry is logical.
+    dpr = image.devicePixelRatio()
     assert any(image.pixelColor(x,y).red() > 230 and image.pixelColor(x,y).alpha() > 230
-               for y in range(890,960) for x in range(850,1070))
+               for y in range(round(890*dpr),round(960*dpr))
+               for x in range(round(850*dpr),round(1070*dpr)))
 
 
 def test_reader_keeps_scroll_and_stays_dismissed_until_panel_closes(app,monkeypatch):

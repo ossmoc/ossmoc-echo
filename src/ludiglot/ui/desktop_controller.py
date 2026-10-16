@@ -79,6 +79,7 @@ class DesktopController(QObject):
         self.special_region_id = self.raw["special_region_id"]
         self.status = "Đang chuẩn bị OCR và dữ liệu…"
         self.ready = False
+        self._initialization_error = ""
         self.history: list[dict] = []
         self.logs: list[str] = []
         self.data_summary = "Chưa tải dữ liệu."
@@ -212,6 +213,7 @@ class DesktopController(QObject):
 
     def initialize(self, resume_after: bool = False) -> None:
         self.ready = False
+        self._initialization_error = ""
         self._init_token += 1
         token = self._init_token
         self._set_status("Đang tải dữ liệu và chuẩn bị Windows OCR…")
@@ -264,6 +266,7 @@ class DesktopController(QObject):
             return
         if "error" in payload:
             self._maintenance = False
+            self._initialization_error = payload["error"]
             self._set_status(payload["error"])
             self.log_message.emit(payload["error"])
             self.data_changed.emit()
@@ -279,6 +282,7 @@ class DesktopController(QObject):
             fallback.set_wakeup(self.session.wake_auto)
         self.capture_adapter.config = self.config
         self.ready = True
+        self._initialization_error = ""
         self._maintenance = False
         self.data_summary = f"{payload['count']:,} nhóm tra cứu • OCR English • tên tiếng Anh\nDữ liệu: {self.config.db_path}"
         coverage = payload.get("coverage", {})
@@ -1405,10 +1409,11 @@ class DesktopController(QObject):
                 QTimer.singleShot(2000, lambda: self.check_updates(force=False))
             return
         self._launch_update_check_done = True
-        self._set_status("Đang kiểm tra cập nhật app và bản dịch…")
+        if force or not self._initialization_error:
+            self._set_status("Đang kiểm tra cập nhật app và bản dịch…")
         def work():
             # One endpoint may fail without hiding the other endpoint's result.
-            results = {}
+            results = {'background': not force}
             for name, factory in (('translation', self._updater), ('app', self._app_updater)):
                 try:
                     results[name] = factory().check_latest()
@@ -1534,7 +1539,12 @@ class DesktopController(QObject):
                 self.app_update_available = False
                 self.app_update_summary = 'Không kiểm tra được cập nhật app.'
                 self.log_message.emit(result['app_error'])
-            self._set_status(self.app_update_summary if self.app_update_available else self.update_summary)
+            # A background network result must not hide the actionable reason
+            # why first-run OCR/data initialization could not complete.
+            status = self.app_update_summary if self.app_update_available else self.update_summary
+            if result.get('background'):
+                status = self._initialization_error or (MISSING_ENGLISH_DATA if not self.has_english_data else status)
+            self._set_status(status)
             self.data_changed.emit()
         elif payload['kind'] == 'app-install':
             try:

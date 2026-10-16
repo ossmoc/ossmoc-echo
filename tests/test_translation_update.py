@@ -54,6 +54,17 @@ def test_seed_source_repair_is_offered_for_same_release_without_downgrade():
     assert not translation_update_status(release,installed)[0]
 
 
+@pytest.mark.parametrize('revision', [None, 1, 2, 3])
+def test_upgrade_from_older_source_builds_offers_repair_without_mutating_data(revision):
+    from ludiglot.core.translation_update import translation_update_status
+    installed = {'release_tag': 'v3.0.17', 'database_name_mode': 'packaged_seed',
+                 'source_build_revision': revision, 'cache_path': 'keep/cache.json'}
+    before = dict(installed)
+    available, message = translation_update_status(ReleaseInfo('v3.0.17'), installed)
+    assert available and 'ghép dữ liệu' in message
+    assert installed == before
+
+
 def database(path: Path, mode: str = "en", *, text: str = "Xin chao Jinhsi", english: str = "Hello Jinhsi") -> bytes:
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE entries(dbfile TEXT,key TEXT,en TEXT,vi TEXT,status TEXT,PRIMARY KEY(dbfile,key))")

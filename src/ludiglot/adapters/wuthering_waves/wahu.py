@@ -238,7 +238,8 @@ class WahuTranslationProvider:
                 proof=self._release_source_proofs.get(exact_identity)
                 original_chinese=str(match.get('official_zh') or (match.get('official_cn') if not match.get('translation_source') else '') or '')
                 if vietnamese and (
-                    (source_english and _source_text(source_english) != _source_text(english))
+                    (source_english and _source_text(source_english) != _source_text(english)
+                     and not (proof and _equivalent_english(source_english, english, {})))
                     or (self.require_source_english and not source_english)
                     or (proof and (not original_chinese or _source_text(original_chinese)!=_source_text(proof[0])
                                    or (source_table and source_table!=proof[1])))

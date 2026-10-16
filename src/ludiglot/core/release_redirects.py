@@ -50,11 +50,13 @@ def story_redirects(archive,canonical,masked,occupied,check_cancel):
                 target=canonical.get(destination,'')
                 # Both siblings carry the ID, sometimes with DIFFERENT targets.
                 # The explicit story VI must select this exact main-file target;
-                # no target equality, mask-length inference or nearest sibling.
+                # no mask-length inference or nearest sibling. Equal sibling
+                # targets are valid: identity/version and the explicit story
+                # target establish a candidate, not inequality between targets.
                 if not target or exact_text(vi)!=exact_text(target):
                     return
-                if not canonical.get((source,key)) or exact_text(canonical.get((source,key),''))==exact_text(target):
-                    return  # Cannot use equal targets to infer redirect direction.
+                if not canonical.get((source,key)):
+                    return
                 proof=(destination[0],key,source,table,f'{version[0]}.{version[1]}',en,cn,target)
                 old=candidates.get(destination)
                 if old and old!=proof:
